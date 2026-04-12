@@ -1,0 +1,3 @@
+MACRO ISSUES
+1. No loops
+2. Special keys doesn't have brackets
