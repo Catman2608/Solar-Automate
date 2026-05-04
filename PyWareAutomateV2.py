@@ -137,7 +137,7 @@ class TermsOfServiceDialog(CTkToplevel):
 
         # Window
         self.geometry("750x600")
-        self.title("PyWare Fishing V3.1 - Terms of Use")
+        self.title("PyWare Automate V2.0 - Terms of Use")
         self.minsize(650, 500)
         
         # Center Window
@@ -214,7 +214,7 @@ class TermsOfServiceDialog(CTkToplevel):
         textbox.grid(row=0, column=0, padx=12, pady=10, sticky="nsew")
 
         textbox.insert("1.0", """
-PyWare Fishing V3.1 - Terms of Use
+PyWare Automate V2.0 - Terms of Use
 
 By using this software, you agree to the following:
 
@@ -279,7 +279,7 @@ Continued use of the software from the PyWare Automate website constitutes accep
 By accepting the terms, you acknowledge that you have read, understood, and agree to these Terms of Use.
 If you do not agree, please remove the software from your device.
 
-🚀 Thank you for using PyWare Fishing! 🚀
+🚀 Thank you for using PyWare Automate! 🚀
         """)
         textbox.configure(state="disabled")
 
@@ -386,7 +386,9 @@ class App(CTk):
             "send": self._cmd_send,
             "pixelsearch": self._cmd_pixelsearch,
             "startcapturethread": self._cmd_startcapturethread,
-            "stopcapturethread": self._cmd_stopcapturethread
+            "stopcapturethread": self._cmd_stopcapturethread,
+            # "if" and "else" are handled structurally by execute_script/
+            # _parse_if_node — they never reach the dispatch map.
         }
 
         # Invalidate Scale Cache If The Window Moves To A Different Monitor
@@ -414,19 +416,8 @@ class App(CTk):
         self.save_app_state(state)
 
         # Start Hotkey Listener
-        self.key_listener = KeyListener(
-            on_press=self._unified_key_press,
-            on_release=self._unified_key_release
-        )
-        self.key_listener.daemon = True
-        self.key_listener.start()
-
-        self.mouse_listener = mouse.Listener(
-            on_click=self._unified_mouse_click,
-            on_move=self._unified_mouse_move
-        )
-        self.mouse_listener.daemon = True
-        self.mouse_listener.start()
+        self.key_listener = None
+        self.after(100, self.start_listeners)
 
         # Save and load to TXT
         self.recorded_actions = []
@@ -1216,8 +1207,7 @@ class App(CTk):
             return key.char.lower()  # Letter Keys
         except AttributeError:
             return str(key).replace("Key.", "").lower()
-    def on_key_press(self, key):
-        pressed_key = self.normalize_key(key)
+    def _handle_key_press_main_thread(self, pressed_key):
         enable_hotkeys = (self.vars["enable_hotkeys"].get() or "on")
         # Save Settings (No Prompt - Auto Save Before Macro Starts)
         config_name = self.config_var.get()
@@ -1246,6 +1236,9 @@ class App(CTk):
                 self.stop_playback()
         else:
             self.save_settings(config_name, prompt=False)
+    def on_key_press(self, key):
+        pressed_key = self.normalize_key(key)
+        self.after(0, self._handle_key_press_main_thread, pressed_key)
     def set_status(self, text, key=None):
         self.status_label.configure(text=text)
     # Macro Helper Functions
@@ -1283,6 +1276,20 @@ class App(CTk):
             return Key[key_string]
         except KeyError:
             return key_string  # normal character keys
+    def start_listeners(self):
+        self.key_listener = KeyListener(
+            on_press=self._unified_key_press,
+            on_release=self._unified_key_release
+        )
+        self.key_listener.daemon = True
+        self.key_listener.start()
+
+        self.mouse_listener = mouse.Listener(
+            on_click=self._unified_mouse_click,
+            on_move=self._unified_mouse_move
+        )
+        self.mouse_listener.daemon = True
+        self.mouse_listener.start()
     # ------------------------------------------------------------------
     # Unified listeners – single keyboard + single mouse listener for
     # the whole app lifetime.  Dispatch to hotkey or recording logic
@@ -1415,58 +1422,335 @@ class App(CTk):
 
     def add_loop_end(self):
         self.recorded_actions.append("}")
+    # ------------------------------------------------------------------ #
+    #  PLAYBACK ENGINE                                                     #
+    # ------------------------------------------------------------------ #
+
     def execute_script(self, actions, speed=1.0):
-        i = 0
+        """
+        Top-level entry point.  Parses the flat action list into a tree of
+        Block objects and then runs them through _exec_block, which handles
+        loops, variables, and if/else/endif nesting at every depth.
+        """
+        block = self._parse_block(actions, 0, len(actions))
+        self._exec_block(block, speed)
 
-        while i < len(actions) and self.macro_running:
-            line = actions[i].strip()
+    # --- Parser -------------------------------------------------------- #
 
-            # ---- LOOP ----
-            if line.startswith("Loop"):
-                try:
-                    # Extract loop count safely
-                    count_part = line.split(",")[1].strip()
-                    count = int(count_part.split()[0])  # handles "2 {" case
-                except:
-                    count = 1
+    def _parse_block(self, actions, start, end):
+        """
+        Converts a slice of the flat actions list (indices [start, end))
+        into a list of node dicts that the executor understands.
 
-                block = []
+        Node kinds
+        ----------
+        {"kind": "line",   "text": str}
+        {"kind": "loop",   "count": int|None, "body": [nodes]}   # None = infinite
+        {"kind": "while",  "condition": str,  "body": [nodes]}
+        {"kind": "if",     "condition": str,
+                           "then": [nodes], "else_": [nodes]}
+        """
+        nodes = []
+        i = start
 
-                # --- Detect inline { ---
-                if "{" in line:
-                    brace_depth = 1
-                    i += 1
-                else:
-                    i += 1
-                    if i < len(actions) and actions[i].strip() == "{":
-                        brace_depth = 1
-                        i += 1
-                    else:
-                        brace_depth = 0
+        while i < end:
+            raw = actions[i].strip()
 
-                # --- Collect block ---
-                while i < len(actions) and brace_depth > 0:
-                    current = actions[i].strip()
+            # ---- skip structural noise ----
+            if self._should_skip_line(raw):
+                i += 1
+                continue
 
-                    if "{" in current:
-                        brace_depth += current.count("{")
-                    if "}" in current:
-                        brace_depth -= current.count("}")
-                        if brace_depth <= 0:
-                            break
+            lower = raw.lower()
 
-                    block.append(actions[i])
-                    i += 1
+            # ---- Loop, N  /  Loop (infinite) ----
+            if re.match(r"^loop\b", lower):
+                count, body_nodes, i = self._parse_loop_node(actions, i, end)
+                nodes.append({"kind": "loop", "count": count, "body": body_nodes})
+                continue
 
-                # --- Execute loop ---
-                for _ in range(count):
-                    self.execute_script(block, speed)
+            # ---- While, <condition> ----
+            if re.match(r"^while\b", lower):
+                condition, body_nodes, i = self._parse_while_node(actions, i, end)
+                nodes.append({"kind": "while", "condition": condition, "body": body_nodes})
+                continue
 
-            else:
-                self.playback_action(line, speed)
+            # ---- If, <condition> ----
+            if re.match(r"^if\b", lower):
+                then_nodes, else_nodes, condition, i = self._parse_if_node(actions, i, end)
+                nodes.append({"kind": "if", "condition": condition,
+                               "then": then_nodes, "else_": else_nodes})
+                continue
 
+            # ---- Else / EndIf / closing brace → handled by callers ----
+            if lower in ("else", "endif") or raw == "}":
+                break
+
+            # ---- Plain line ----
+            nodes.append({"kind": "line", "text": raw})
             i += 1
+
+        return nodes
+
+    def _collect_block_body(self, actions, i, end):
+        """
+        Reads lines until the matching closing brace or until a keyword
+        that terminates the block (else / endif).
+        Returns (body_lines_slice_start, slice_end, new_i).
+
+        Supports both brace-delimited  { … }  and brace-less (one-liners).
+        """
+        # Advance past optional opening brace on the *same* line as the keyword
+        # (already consumed) or on the next line.
+        if i < end and actions[i].strip() == "{":
+            i += 1  # skip standalone opening brace
+
+        body_start = i
+        depth = 1 if (i > 0 and "{" in actions[i - 1]) else 1
+
+        # Walk forward and match braces
+        depth = 0
+        body_lines = []
+        while i < end:
+            stripped = actions[i].strip()
+            if stripped == "{":
+                depth += 1
+                i += 1
+                continue
+            if stripped == "}":
+                if depth == 0:
+                    i += 1  # consume the closing brace
+                    break
+                depth -= 1
+                i += 1
+                continue
+            lower = stripped.lower()
+            if depth == 0 and lower in ("else", "endif"):
+                break
+            body_lines.append(stripped)
+            i += 1
+
+        return body_lines, i
+
+    def _parse_loop_node(self, actions, i, end):
+        """Parse  Loop[, N]  { … }  and return (count, body_nodes, new_i)."""
+        header = actions[i].strip()
+        i += 1
+
+        # Extract count from  "Loop, 10"  or  "Loop, 10 {"  or just  "Loop"
+        m = re.match(r"loop\s*(?:,\s*(\d+))?", header, re.IGNORECASE)
+        count = int(m.group(1)) if (m and m.group(1)) else None  # None = infinite
+
+        # Consume optional opening brace on same line or next line
+        if i < end and actions[i].strip() == "{":
+            i += 1
+
+        body_lines, i = self._collect_block_body(actions, i, end)
+        body_nodes = self._parse_block(body_lines, 0, len(body_lines))
+        return count, body_nodes, i
+
+    def _parse_while_node(self, actions, i, end):
+        """Parse  While, <condition>  { … }  and return (condition, body_nodes, new_i)."""
+        header = actions[i].strip()
+        i += 1
+
+        m = re.match(r"while\s*,?\s*(.+)", header, re.IGNORECASE)
+        condition = m.group(1).strip() if m else "False"
+
+        if i < end and actions[i].strip() == "{":
+            i += 1
+
+        body_lines, i = self._collect_block_body(actions, i, end)
+        body_nodes = self._parse_block(body_lines, 0, len(body_lines))
+        return condition, body_nodes, i
+
+    def _parse_if_node(self, actions, i, end):
+        """
+        Parse  If, <condition>  { … }  [Else  { … }]  [EndIf]
+        Returns (then_nodes, else_nodes, condition, new_i).
+        """
+        header = actions[i].strip()
+        i += 1
+
+        m = re.match(r"if\s*,?\s*(.+)", header, re.IGNORECASE)
+        condition = m.group(1).strip() if m else "False"
+
+        if i < end and actions[i].strip() == "{":
+            i += 1
+
+        then_lines, i = self._collect_block_body(actions, i, end)
+        then_nodes = self._parse_block(then_lines, 0, len(then_lines))
+
+        # Check for Else
+        else_nodes = []
+        if i < end and actions[i].strip().lower() == "else":
+            i += 1  # consume "else"
+            if i < end and actions[i].strip() == "{":
+                i += 1
+            else_lines, i = self._collect_block_body(actions, i, end)
+            else_nodes = self._parse_block(else_lines, 0, len(else_lines))
+
+        # Consume optional EndIf
+        if i < end and actions[i].strip().lower() == "endif":
+            i += 1
+
+        return then_nodes, else_nodes, condition, i
+
+    # --- Executor ------------------------------------------------------ #
+
+    def _exec_block(self, nodes, speed):
+        """
+        Recursively execute a list of parsed nodes.
+        Respects self.macro_running so F7 stops everything immediately.
+        """
+        for node in nodes:
+            if not self.macro_running:
+                return
+
+            kind = node["kind"]
+
+            if kind == "line":
+                self._exec_line(node["text"], speed)
+
+            elif kind == "loop":
+                count = node["count"]
+                body  = node["body"]
+                if count is None:
+                    # Infinite loop — only self.macro_running breaks it
+                    while self.macro_running:
+                        self._exec_block(body, speed)
+                else:
+                    for _ in range(count):
+                        if not self.macro_running:
+                            return
+                        self._exec_block(body, speed)
+
+            elif kind == "while":
+                while self.macro_running and self._evaluate_condition(
+                        self._resolve_variables(node["condition"])):
+                    self._exec_block(node["body"], speed)
+
+            elif kind == "if":
+                resolved_cond = self._resolve_variables(node["condition"])
+                if self._evaluate_condition(resolved_cond):
+                    self._exec_block(node["then"], speed)
+                else:
+                    self._exec_block(node["else_"], speed)
+
+    def _exec_line(self, line, speed):
+        """Execute a single resolved action line."""
+        # Variable assignment  (x := expr)
+        if self._handle_assignment(line):
+            return
+        # Math shorthand  (x += 5 / x -= 2 / x *= 3 / x /= 2)
+        if self._handle_math(line):
+            return
+        # Substitute %Var% tokens before dispatching
+        line = self._handle_variable(line)
+        self.playback_action(line, speed)
     # Playback functions
+    def _handle_assignment(self, action):
+        """
+        Handles:
+        x := 612
+        """
+        if ":=" in action:
+            var, value = action.split(":=", 1)
+            var = var.strip()
+            value = value.strip()
+
+            try:
+                self.variables[var] = eval(value)
+            except:
+                self.variables[var] = value
+
+            return True  # handled
+
+        return False
+    def _handle_math(self, action):
+        """
+        Handles compound assignment operators:
+            x += 5   x -= 2   x *= 3   x /= 2
+        Values on the right-hand side may themselves be expressions or
+        %variable% references, so we resolve them before evaluating.
+        """
+        for op in ("+=", "-=", "*=", "/="):
+            if op in action:
+                var, rhs = action.split(op, 1)
+                var = var.strip()
+                rhs = self._handle_variable(rhs.strip())
+                try:
+                    rhs_val = float(eval(rhs))
+                except Exception:
+                    return False
+
+                cur = self.variables.get(var, 0)
+                try:
+                    cur = float(cur)
+                except Exception:
+                    cur = 0.0
+
+                if op == "+=":
+                    self.variables[var] = cur + rhs_val
+                elif op == "-=":
+                    self.variables[var] = cur - rhs_val
+                elif op == "*=":
+                    self.variables[var] = cur * rhs_val
+                elif op == "/=":
+                    self.variables[var] = cur / rhs_val if rhs_val != 0 else 0
+                return True
+
+        return False
+
+    def _handle_variable(self, action):
+        """
+        Replace AHK-style variables:
+        %Var% → actual value
+        """
+
+        def replace_var(match):
+            var_name = match.group(1)
+            return str(self.variables.get(var_name, 0))
+
+        # Replace %Var% patterns
+        action = re.sub(r"%(\w+)%", replace_var, action)
+
+        return action
+    def _should_skip_line(self, line):
+        line = line.strip()
+
+        if not line:
+            return True
+
+        # Hotkeys / labels
+        if line.endswith("::"):
+            return True
+
+        # Block markers
+        if line in ("{", "}"):
+            return True
+
+        # AHK boilerplate
+        if line.startswith((
+            "SetBatchLines",
+            "SetKeyDelay",
+            "SetMouseDelay",
+            "SetTitleMatchMode",
+            "SendMode"
+        )):
+            return True
+
+        # Flow control noise
+        if line.lower() == "return":
+            return True
+
+        # Function definitions (important)
+        if line.endswith("{") and "(" in line:
+            return True
+
+        return False
+    # _handle_loop removed — loop parsing is now done by _parse_loop_node
+    # inside the block-aware execute_script engine.
     def _clean_ahk_braces(self, key_raw):
         # Remove braces like {Enter}, {Down}, {Space}
         key_raw = key_raw.strip()
@@ -1482,6 +1766,10 @@ class App(CTk):
             f"    {action}\n"
             f"    {description}\n"
         )
+        print(f"Error: The script contains syntax errors.",
+            f"Specifically:",
+            f"    {action}",
+            f"    {description}")
     def release_all_keys(self):
         for key in list(self.held_keys):
             try:
@@ -1705,8 +1993,8 @@ class App(CTk):
             if len(parts) < 2:
                 raise ValueError("Click requires at least x and y")
 
-            x = int(parts[0])
-            y = int(parts[1])
+            x = int(float(parts[0]))
+            y = int(float(parts[1]))
 
             # --- DEFAULT BEHAVIOR (AHK style) ---
             down_up = "click"
@@ -1841,6 +2129,19 @@ class App(CTk):
                 self.variables[out_x] = -1
                 self.variables[out_y] = -1
 
+            if pos:
+                px, py = pos
+                px += x1
+                py += y1
+
+                self.variables[out_x] = px
+                self.variables[out_y] = py
+                self.variables["ErrorLevel"] = 0
+            else:
+                self.variables[out_x] = -1
+                self.variables[out_y] = -1
+                self.variables["ErrorLevel"] = 1
+
         except Exception as e:
             self.playback_errors.append((action, str(e)))
     def _cmd_startcapturethread(self, action, speed):
@@ -1848,6 +2149,34 @@ class App(CTk):
 
     def _cmd_stopcapturethread(self, action, speed):
         self.stop_capture_thread()
+    # _cmd_if and _cmd_else have been removed.
+    # Conditional logic is now handled structurally by _parse_if_node /
+    # _exec_block, so "If" lines never reach the dispatch map.
+    def _evaluate_condition(self, condition):
+        """
+        Evaluate a condition string, supporting AHK-style operators.
+
+        Examples
+        --------
+        ErrorLevel = 0       →  ErrorLevel == 0
+        Px != -1
+        Px > 100
+        x >= 5 and y < 10
+        """
+        # Substitute variable values
+        for var, value in self.variables.items():
+            condition = re.sub(rf"\b{re.escape(var)}\b", str(value), condition)
+
+        # AHK bare `=` → Python `==` (but leave !=, >=, <=, == untouched)
+        condition = re.sub(r'(?<![!<>=])=(?!=)', '==', condition)
+
+        # AHK `&&` / `||`  →  Python `and` / `or`
+        condition = condition.replace("&&", " and ").replace("||", " or ")
+
+        try:
+            return bool(eval(condition))
+        except Exception:
+            return False
     # Playback
     def playback_action(self, action, speed=1.0):
         action = action.strip()
@@ -1865,7 +2194,7 @@ class App(CTk):
 
         # Variable assignment
         if ":=" in action:
-            self._handle_variable(action)
+            action = self._handle_variable(action)
             return
 
         # Dispatcher
