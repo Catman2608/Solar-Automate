@@ -23,6 +23,7 @@ import webbrowser
 import re
 import numpy as np
 import mss
+import Quartz
 # Initialize controllers
 keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
@@ -374,6 +375,12 @@ class App(CTk):
         self.capture_thread = None
         self.latest_frame = None
         self.capture_lock = threading.Lock()
+        
+        # Screen Capture Variables — Mss Instances Are Per-Thread (See _Thread_Local)
+        self._thread_local = threading.local()
+        self._monitor = {}      # Pre-Allocated Monitor Dict, Reused Every Grab
+        self._scale_cache = None  # Cached Dpi Scale Factor
+        self.capture_stop_event = threading.Event()
 
         # Safe Defaults Before Key Listener Starts (Will Be Overwritten By Load_Misc_Settings)
         self.bar_areas = {"shake": None, "fish": None, "friend": None, "totem": None}
@@ -1393,14 +1400,36 @@ class App(CTk):
     def start_capture_thread(self):
         if self.capture_running:
             return
-
+        self.capture_scan_delay = float(self.vars["scan_delay"].get())
         self.capture_running = True
-        self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+
+        # Reset stop event
+        self.capture_stop_event.clear()
+
+        # Optional: pull from UI/config
+        try:
+            self.capture_scan_delay = float(self.vars.get("scan_delay", 0.01).get())
+        except:
+            self.capture_scan_delay = 0.01
+
+        self.capture_thread = threading.Thread(
+            target=self._capture_loop_full,
+            args=(self.capture_stop_event, self.capture_scan_delay),
+            daemon=True
+        )
         self.capture_thread.start()
     def stop_capture_thread(self):
+        if not self.capture_running:
+            return
+
         self.capture_running = False
+
+        # Signal stop
+        self.capture_stop_event.set()
+
         if self.capture_thread:
             self.capture_thread.join(timeout=1)
+            self.capture_thread = None
     def record_action(self, action_text):
         """Record delay + the action into recorded_actions list."""
 
@@ -1432,7 +1461,34 @@ class App(CTk):
         Block objects and then runs them through _exec_block, which handles
         loops, variables, and if/else/endif nesting at every depth.
         """
-        block = self._parse_block(actions, 0, len(actions))
+        # Normalize actions: split lines that have braces mixed with keywords
+        # e.g. "if (cond) {" -> "if (cond)", "{"
+        # e.g. "} else {"    -> "}", "else", "{"
+        normalized = []
+        for line in actions:
+            s = line.strip()
+            if not s:
+                normalized.append(line)
+                continue
+            
+            # Skip normalization for Send commands as they use braces for keys
+            if s.lower().startswith("send"):
+                normalized.append(line)
+                continue
+
+            # Split leading } if it's not a standalone brace
+            if s.startswith("}") and len(s) > 1:
+                normalized.append("}")
+                s = s[1:].strip()
+            
+            # Split trailing { if it's not a standalone brace
+            if s.endswith("{") and len(s) > 1:
+                normalized.append(s[:-1].strip())
+                normalized.append("{")
+            else:
+                if s: normalized.append(s)
+
+        block = self._parse_block(normalized, 0, len(normalized))
         self._exec_block(block, speed)
 
     # --- Parser -------------------------------------------------------- #
@@ -1496,37 +1552,43 @@ class App(CTk):
         """
         Reads lines until the matching closing brace or until a keyword
         that terminates the block (else / endif).
-        Returns (body_lines_slice_start, slice_end, new_i).
+        Returns (body_lines, new_i).
 
         Supports both brace-delimited  { … }  and brace-less (one-liners).
         """
         # Advance past optional opening brace on the *same* line as the keyword
-        # (already consumed) or on the next line.
+        # (already handled by normalization or consumed) or on the next line.
         if i < end and actions[i].strip() == "{":
             i += 1  # skip standalone opening brace
-
-        body_start = i
-        depth = 1 if (i > 0 and "{" in actions[i - 1]) else 1
 
         # Walk forward and match braces
         depth = 0
         body_lines = []
         while i < end:
             stripped = actions[i].strip()
+            
+            # Handle braces
             if stripped == "{":
                 depth += 1
                 i += 1
                 continue
-            if stripped == "}":
+            
+            if stripped.startswith("}"):
                 if depth == 0:
-                    i += 1  # consume the closing brace
+                    # If it's JUST "}", consume it. 
+                    # If it's "} else", don't consume it here, let _parse_if_node handle it.
+                    if stripped == "}":
+                        i += 1
                     break
                 depth -= 1
                 i += 1
                 continue
+                
             lower = stripped.lower()
-            if depth == 0 and lower in ("else", "endif"):
+            # If we're at depth 0, certain keywords terminate a brace-less block
+            if depth == 0 and (lower == "else" or lower.startswith("else ") or lower == "endif" or lower.startswith("endif ")):
                 break
+                
             body_lines.append(stripped)
             i += 1
 
@@ -1566,14 +1628,22 @@ class App(CTk):
 
     def _parse_if_node(self, actions, i, end):
         """
-        Parse  If, <condition>  { … }  [Else  { … }]  [EndIf]
+        Parse an If block in either AHK style:
+            If, ErrorLevel = 0  { … }          (comma-separated)
+            if (ErrorLevel == 0) { … }          (parenthesis-style)
         Returns (then_nodes, else_nodes, condition, new_i).
         """
         header = actions[i].strip()
         i += 1
 
-        m = re.match(r"if\s*,?\s*(.+)", header, re.IGNORECASE)
-        condition = m.group(1).strip() if m else "False"
+        # Parenthesis style:  if (cond)
+        m = re.match(r"if\s*\((.+)\)", header, re.IGNORECASE)
+        if m:
+            condition = m.group(1).strip()
+        else:
+            # Comma style:  If, cond  or  If cond
+            m = re.match(r"if\s*,?\s*(.+)", header, re.IGNORECASE)
+            condition = m.group(1).strip() if m else "False"
 
         if i < end and actions[i].strip() == "{":
             i += 1
@@ -1583,16 +1653,20 @@ class App(CTk):
 
         # Check for Else
         else_nodes = []
-        if i < end and actions[i].strip().lower() == "else":
-            i += 1  # consume "else"
-            if i < end and actions[i].strip() == "{":
-                i += 1
-            else_lines, i = self._collect_block_body(actions, i, end)
-            else_nodes = self._parse_block(else_lines, 0, len(else_lines))
+        if i < end:
+            s = actions[i].strip().lower()
+            if s == "else" or s.startswith("else ") or s.startswith("else{"):
+                i += 1  # consume "else"
+                if i < end and actions[i].strip() == "{":
+                    i += 1
+                else_lines, i = self._collect_block_body(actions, i, end)
+                else_nodes = self._parse_block(else_lines, 0, len(else_lines))
 
         # Consume optional EndIf
-        if i < end and actions[i].strip().lower() == "endif":
-            i += 1
+        if i < end:
+            s = actions[i].strip().lower()
+            if s == "endif" or s.startswith("endif "):
+                i += 1
 
         return then_nodes, else_nodes, condition, i
 
@@ -1744,11 +1818,46 @@ class App(CTk):
         if line.lower() == "return":
             return True
 
-        # Function definitions (important)
-        if line.endswith("{") and "(" in line:
-            return True
+        # Function definitions / calls (currently unsupported)
+        # Matches "Func()" or "Func() {" but excludes flow control like "if (cond)"
+        if re.match(r"^[a-zA-Z_]\w*\(.*\)\s*\{?$", line):
+            if not re.match(r"^(if|while|loop|for)\b", line, re.IGNORECASE):
+                return True
 
         return False
+    # Grab Screen And Apply Scale Factor
+    def _get_scale_factor(self):
+        """
+        Return physical-pixels-per-logical-point for the display.
+
+        Derived from Tkinter's winfo_fpixels so it reflects whichever monitor
+        the window is currently on.  Falls back to Quartz if Tk isn't ready.
+        Cache is invalidated by _invalidate_scale_cache() on <Configure>.
+        """
+        if self._scale_cache is not None:
+            return self._scale_cache
+        if sys.platform == "darwin":
+            try:
+                try:
+                    main_display  = Quartz.CGMainDisplayID()
+                    pixel_width   = Quartz.CGDisplayPixelsWide(main_display)
+                    bounds        = Quartz.CGDisplayBounds(main_display)
+                    logical_width = bounds.size.width
+                    self._scale_cache = pixel_width / logical_width if logical_width else 1.0
+                except Exception:
+                    self._scale_cache = 1.0
+            except Exception:
+                tk_dpi = self.winfo_fpixels('1i')   # e.g. 144.0 on Retina
+                scale  = tk_dpi / 72.0              # 144/72 = 2.0 on Retina
+                scale  = max(1.0, min(4.0, scale))
+                self._scale_cache = scale
+        else:
+            self._scale_cache = 1.0
+        return self._scale_cache
+
+    def _invalidate_scale_cache(self):
+        """Force _get_scale_factor to re-query on next call (e.g. window moved to another monitor)."""
+        self._scale_cache = None
     # _handle_loop removed — loop parsing is now done by _parse_loop_node
     # inside the block-aware execute_script engine.
     def _clean_ahk_braces(self, key_raw):
@@ -1810,21 +1919,16 @@ class App(CTk):
         return np.frombuffer(img.raw, dtype=np.uint8).reshape(
             m["height"], m["width"], 4
         )[:, :, :3]
-
-
     def _capture_loop_full(self, stop_event, scan_delay):
         thread_local = threading.local()
 
-        # On Macos, Mss Uses Core Graphics Which Is Slow To Call In A Tight Loop.
-        # Enforce A Minimum Sleep So We Don'T Saturate The Cpu And Starve The Game
-        # And The Pid Thread.  At 20 Fps A Frame Is ~0.05 S; Floor At 0.033 S
-        # (~30 Fps) So We Never Spin Faster Than The Game Can Pconfiguce New Pixels.
         import sys as _sys
         _mac_floor = 0.033 if _sys.platform == "darwin" else 0.0
 
         try:
-            while self.macro_running and not stop_event.is_set():
+            while not stop_event.is_set():
                 t0 = time.perf_counter()
+
                 frame = self._grab_screen_full(thread_local)
 
                 with self._cap_lock:
@@ -1833,8 +1937,10 @@ class App(CTk):
 
                 elapsed = time.perf_counter() - t0
                 sleep_for = max(_mac_floor, scan_delay) - elapsed
+
                 if sleep_for > 0:
                     time.sleep(sleep_for)
+
         finally:
             sct = getattr(thread_local, "sct", None)
             if sct is not None:
@@ -1842,6 +1948,7 @@ class App(CTk):
                     sct.close()
                 except Exception:
                     pass
+
             self._cap_event.set()
     def get_latest_frame(self):
         with self.capture_lock:
@@ -1978,7 +2085,7 @@ class App(CTk):
     # Pipelines
     def _cmd_sleep(self, action, speed):
         _, value = action.split(",", 1)
-        ms = int(value.strip())
+        ms = float(value.strip())   # float() accepts "400.0" and "400"
         time.sleep((ms / 1000) / speed)
     def _cmd_mousemove(self, action, speed):
         _, args = action.split(",", 1)
@@ -2101,41 +2208,41 @@ class App(CTk):
             y2 = int(parts[5])
 
             color = parts[6]
-            tolerance = int(parts[7]) if len(parts) > 7 else 8
+            # Strip trailing AHK options like "Fast", "RGB" from tolerance field
+            tol_raw = parts[7].split()[0] if len(parts) > 7 else "8"
+            tolerance = int(tol_raw)
 
+            # Use the shared capture frame if available; otherwise grab one-shot
             frame = self.get_latest_frame()
+            if frame is None:
+                thread_local = threading.local()
+                frame = self._grab_screen_full(thread_local)
+
             if frame is None:
                 self.variables[out_x] = -1
                 self.variables[out_y] = -1
+                self.variables["ErrorLevel"] = 1
                 return
 
-            # Crop AFTER capture (your optimization)
-            region = frame[y1:y2, x1:x2]
+            # mss returns BGRA/BGR; _grab_screen_full slices to [:,:,:3] → BGR.
+            # Convert BGR → RGB so _parse_ahk_color (RRGGBB) matches correctly.
+            frame_rgb = frame[:, :, ::-1]
+
+            region = frame_rgb[y1:y2, x1:x2]
 
             rgb = self._parse_ahk_color(color)
-
             if rgb is None:
                 self.variables[out_x] = -1
                 self.variables[out_y] = -1
+                self.variables["ErrorLevel"] = 1
                 return
-            
+
             pos = self._find_first_pixel(region, rgb, tolerance)
 
             if pos:
                 px, py = pos
                 self.variables[out_x] = px + x1
                 self.variables[out_y] = py + y1
-            else:
-                self.variables[out_x] = -1
-                self.variables[out_y] = -1
-
-            if pos:
-                px, py = pos
-                px += x1
-                py += y1
-
-                self.variables[out_x] = px
-                self.variables[out_y] = py
                 self.variables["ErrorLevel"] = 0
             else:
                 self.variables[out_x] = -1
@@ -2143,7 +2250,7 @@ class App(CTk):
                 self.variables["ErrorLevel"] = 1
 
         except Exception as e:
-            self.playback_errors.append((action, str(e)))
+            self.add_error(action, str(e))
     def _cmd_startcapturethread(self, action, speed):
         self.start_capture_thread()
 
@@ -2199,6 +2306,7 @@ class App(CTk):
 
         # Dispatcher
         cmd = action.split(",", 1)[0].strip().lower()
+        cmd = cmd.replace("()", "") # Remove empty parentheses
         handler = self.dispatch_map.get(cmd)
 
         if handler:
