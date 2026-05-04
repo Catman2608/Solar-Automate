@@ -1,0 +1,32 @@
+    def _parse_ahk_color(self, color):
+        """
+        Convert AHK color to an RGB tuple.
+
+        AHK's PixelSearch and PixelGetColor use 0xRRGGBB (standard web order),
+        NOT 0xBBGGRR.  Both 0xRRGGBB and #RRGGBB forms are handled.
+        """
+
+        if not color:
+            return None
+
+        color = color.strip().lower()
+
+        try:
+            if color.startswith("0x"):
+                value = int(color, 16)
+                r = (value >> 16) & 0xFF
+                g = (value >> 8)  & 0xFF
+                b =  value        & 0xFF
+                return (r, g, b)
+
+            if color.startswith("#"):
+                color = color[1:]
+                r = int(color[0:2], 16)
+                g = int(color[2:4], 16)
+                b = int(color[4:6], 16)
+                return (r, g, b)
+
+        except Exception:
+            return None
+
+        return None
