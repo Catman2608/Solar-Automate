@@ -405,7 +405,7 @@ class App(CTk):
         # Show Tos Dialogue
         state, first_launch, new_version = self.load_app_state()
 
-        # 🔥 Show Tos If Needed
+        # Important: Show Tos If Needed
         if first_launch or not state.get("tos_accepted", False):
             dialog = TermsOfServiceDialog(self)
             self.wait_window(dialog)
@@ -722,7 +722,7 @@ class App(CTk):
                 # Corrupted File = Treat As First Launch
                 pass
 
-        # 🔥 Detection Logic
+        # Important: Detection Logic
         is_first_launch = state["version"] is None
         is_new_version = state["version"] != APP_VERSION
 
@@ -2488,7 +2488,7 @@ class App(CTk):
 
         self.macro_running = False
         self.is_playing_back = False
-        self.release_all_keys()   # 🔥 IMPORTANT
+        self.release_all_keys()   # Important: IMPORTANT
         self.after(0, self.deiconify)
         self.set_status("Macro Status: Stopped Playback")
 if __name__ == "__main__":

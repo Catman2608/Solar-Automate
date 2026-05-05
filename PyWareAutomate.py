@@ -1133,7 +1133,7 @@ class App(CTk):
 
         self.macro_running = False
         self.is_playing_back = False
-        self.release_all_keys()   # 🔥 IMPORTANT
+        self.release_all_keys()   # Important: IMPORTANT
         self.after(0, self.deiconify)
         self.set_status("Macro Status: Stopped Playback")
 if __name__ == "__main__":
