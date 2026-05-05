@@ -24,6 +24,7 @@ import re
 import numpy as np
 import mss
 import Quartz
+import sys
 # Initialize controllers
 keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
@@ -394,6 +395,7 @@ class App(CTk):
             "pixelsearch": self._cmd_pixelsearch,
             "startcapturethread": self._cmd_startcapturethread,
             "stopcapturethread": self._cmd_stopcapturethread,
+            "msgbox": self._cmd_msgbox,
             # "if" and "else" are handled structurally by execute_script/
             # _parse_if_node — they never reach the dispatch map.
         }
@@ -405,7 +407,7 @@ class App(CTk):
         # Show Tos Dialogue
         state, first_launch, new_version = self.load_app_state()
 
-        # 🔥 Show Tos If Needed
+        # Important: Show Tos If Needed
         if first_launch or not state.get("tos_accepted", False):
             dialog = TermsOfServiceDialog(self)
             self.wait_window(dialog)
@@ -429,6 +431,8 @@ class App(CTk):
         # Save and load to TXT
         self.recorded_actions = []
         self.recording_file = os.path.join(CONFIG_DIR, "recording.ahk")
+
+        self._init_builtin_variables()
 
         # Handle AHK errors
         self.playback_errors = []
@@ -483,10 +487,10 @@ class App(CTk):
 
         CTkButton(
             button_frame,
-            text="Tutorial",
+            text="Extras",
             width=120,
             corner_radius=8,
-            command=self.open_link("https://docs.google.com/document/d/1EgzNRa5nxw90zxP4aij3DXl7cbarKNW_ozISom4McV0/")
+            command=self.open_link("https://docs.google.com/document/d/1KdWwS1qSDA4cQYQ26fNKLlIfK67wo47yRsXezuKBPrA/")
         ).pack(side="left", padx=6)
 
         # Tabs
@@ -722,7 +726,7 @@ class App(CTk):
                 # Corrupted File = Treat As First Launch
                 pass
 
-        # 🔥 Detection Logic
+        # Important: Detection Logic
         is_first_launch = state["version"] is None
         is_new_version = state["version"] != APP_VERSION
 
@@ -1284,19 +1288,24 @@ class App(CTk):
         except KeyError:
             return key_string  # normal character keys
     def start_listeners(self):
-        self.key_listener = KeyListener(
-            on_press=self._unified_key_press,
-            on_release=self._unified_key_release
-        )
-        self.key_listener.daemon = True
-        self.key_listener.start()
-
-        self.mouse_listener = mouse.Listener(
-            on_click=self._unified_mouse_click,
-            on_move=self._unified_mouse_move
-        )
-        self.mouse_listener.daemon = True
-        self.mouse_listener.start()
+        try:
+            self.key_listener = KeyListener(
+                on_press=self._unified_key_press,
+                on_release=self._unified_key_release
+            )
+            self.key_listener.daemon = True
+            self.key_listener.start()
+        except Exception as e:
+            self.set_status(f"Key Listener not available: {e}")
+        try:
+            self.mouse_listener = mouse.Listener(
+                on_click=self._unified_mouse_click,
+                on_move=self._unified_mouse_move
+            )
+            self.mouse_listener.daemon = True
+            self.mouse_listener.start()
+        except Exception as e:
+            self.set_status(f"Mouse Listener not available: {e}")
     # ------------------------------------------------------------------
     # Unified listeners – single keyboard + single mouse listener for
     # the whole app lifetime.  Dispatch to hotkey or recording logic
@@ -1654,8 +1663,26 @@ class App(CTk):
         # Check for Else
         else_nodes = []
         if i < end:
-            s = actions[i].strip().lower()
-            if s == "else" or s.startswith("else ") or s.startswith("else{"):
+            raw_else = actions[i].strip()
+            s = raw_else.lower()
+
+            # Support AHK-style "else if" chains by parsing them as a nested
+            # if-node inside the else branch.
+            if re.match(r"^else\s+if\b", s):
+                nested_header = re.sub(r"^else\s+", "", raw_else, count=1, flags=re.IGNORECASE)
+                nested_actions = [nested_header] + actions[i + 1:end]
+                nested_then, nested_else, nested_condition, nested_i = self._parse_if_node(
+                    nested_actions, 0, len(nested_actions)
+                )
+                else_nodes = [{
+                    "kind": "if",
+                    "condition": nested_condition,
+                    "then": nested_then,
+                    "else_": nested_else,
+                }]
+                i += nested_i
+
+            elif s == "else" or s.startswith("else{"):
                 i += 1  # consume "else"
                 if i < end and actions[i].strip() == "{":
                     i += 1
@@ -1733,12 +1760,17 @@ class App(CTk):
             var = var.strip()
             value = value.strip()
 
+            # ❌ Block built-in overwrite
+            if var in self.builtin_variables:
+                self.add_error(action, f"Cannot overwrite built-in variable: {var}")
+                return True
+
             try:
                 self.variables[var] = eval(value)
             except:
                 self.variables[var] = value
 
-            return True  # handled
+            return True
 
         return False
     def _handle_math(self, action):
@@ -1776,20 +1808,21 @@ class App(CTk):
 
         return False
 
-    def _handle_variable(self, action):
-        """
-        Replace AHK-style variables:
-        %Var% → actual value
-        """
-
-        def replace_var(match):
+    def _handle_variable(self, text):
+        def replacer(match):
             var_name = match.group(1)
-            return str(self.variables.get(var_name, 0))
 
-        # Replace %Var% patterns
-        action = re.sub(r"%(\w+)%", replace_var, action)
+            # Priority: user variables
+            if var_name in self.variables:
+                return str(self.variables[var_name])
 
-        return action
+            # Then builtin variables
+            if var_name in self.builtin_variables:
+                return str(self.builtin_variables[var_name])
+
+            return ""  # or keep original if you prefer strict mode
+
+        return re.sub(r"%(\w+)%", replacer, text)
     def _should_skip_line(self, line):
         line = line.strip()
 
@@ -1922,8 +1955,7 @@ class App(CTk):
     def _capture_loop_full(self, stop_event, scan_delay):
         thread_local = threading.local()
 
-        import sys as _sys
-        _mac_floor = 0.033 if _sys.platform == "darwin" else 0.0
+        _mac_floor = 0.033 if sys.platform == "darwin" else 0.0
 
         try:
             while not stop_event.is_set():
@@ -1993,8 +2025,7 @@ class App(CTk):
         stop_event = threading.Event()
         self._active_capture_stop = stop_event  # Track The Active Stop Event
 
-        import sys as _sys
-        _mac_floor = 0.033 if _sys.platform == "darwin" else 0.0
+        _mac_floor = 0.033 if sys.platform == "darwin" else 0.0
 
         def _loop():
             try:
@@ -2082,6 +2113,27 @@ class App(CTk):
             return None
 
         return None
+    def _init_builtin_variables(self):
+        import sys
+
+        # Screen
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+
+        # Platform mapping
+        if sys.platform.startswith("darwin"):
+            platform_val = 0
+        elif sys.platform.startswith("linux"):
+            platform_val = 1
+        else:
+            # Windows OR standard AHK behavior
+            platform_val = -1
+
+        self.builtin_variables = {
+            "A_ScreenWidth": screen_width,
+            "A_ScreenHeight": screen_height,
+            "A_Platform": platform_val,
+        }
     # Pipelines
     def _cmd_sleep(self, action, speed):
         _, value = action.split(",", 1)
@@ -2208,12 +2260,17 @@ class App(CTk):
             y2 = int(parts[5])
 
             color = parts[6]
-            # Strip trailing AHK options like "Fast", "RGB" from tolerance field
+
+            # Strip trailing AHK options like "Fast", "RGB"
             tol_raw = parts[7].split()[0] if len(parts) > 7 else "8"
             tolerance = int(tol_raw)
 
-            # Use the shared capture frame if available; otherwise grab one-shot
+            # --- Wait for capture frame (prevents blank reads) ---
+            if hasattr(self, "_cap_event"):
+                self._cap_event.wait(timeout=0.2)
+
             frame = self.get_latest_frame()
+
             if frame is None:
                 thread_local = threading.local()
                 frame = self._grab_screen_full(thread_local)
@@ -2224,11 +2281,24 @@ class App(CTk):
                 self.variables["ErrorLevel"] = 1
                 return
 
-            # mss returns BGRA/BGR; _grab_screen_full slices to [:,:,:3] → BGR.
-            # Convert BGR → RGB so _parse_ahk_color (RRGGBB) matches correctly.
-            frame_rgb = frame[:, :, ::-1]
+            # --- Ensure correct color space (BGR → RGB) ---
+            frame = frame[:, :, ::-1]
 
-            region = frame_rgb[y1:y2, x1:x2]
+            h, w = frame.shape[:2]
+
+            # --- Clamp region (prevents crashes + macOS scaling issues) ---
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(0, min(x2, w))
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(0, min(y2, h))
+
+            if x2 <= x1 or y2 <= y1:
+                self.variables[out_x] = -1
+                self.variables[out_y] = -1
+                self.variables["ErrorLevel"] = 1
+                return
+
+            region = frame[y1:y2, x1:x2]
 
             rgb = self._parse_ahk_color(color)
             if rgb is None:
@@ -2237,6 +2307,7 @@ class App(CTk):
                 self.variables["ErrorLevel"] = 1
                 return
 
+            # --- Pixel search ---
             pos = self._find_first_pixel(region, rgb, tolerance)
 
             if pos:
@@ -2256,6 +2327,43 @@ class App(CTk):
 
     def _cmd_stopcapturethread(self, action, speed):
         self.stop_capture_thread()
+    def _cmd_msgbox(self, action, speed):
+        try:
+            # Split once after command
+            _, args = action.split(",", 1)
+
+            # Split parameters
+            parts = [p.strip() for p in args.split(",")]
+
+            # Apply variable substitution BEFORE using values
+            parts = [self._handle_variable(p) for p in parts]
+
+            # Default values
+            options = None
+            title = ""
+            text = ""
+
+            # AHK supports multiple forms:
+            if len(parts) == 1:
+                # MsgBox, Text
+                text = parts[0]
+
+            elif len(parts) == 2:
+                # MsgBox, Options, Text
+                options = parts[0]
+                text = parts[1]
+
+            elif len(parts) >= 3:
+                # MsgBox, Options, Title, Text
+                options = parts[0]
+                title = parts[1]
+                text = parts[2]
+
+            # Show messagebox
+            messagebox.showinfo(title if title else "recording.ahk", text)
+
+        except Exception as e:
+            self.add_error(action, str(e))
     # _cmd_if and _cmd_else have been removed.
     # Conditional logic is now handled structurally by _parse_if_node /
     # _exec_block, so "If" lines never reach the dispatch map.
@@ -2270,20 +2378,40 @@ class App(CTk):
         Px > 100
         x >= 5 and y < 10
         """
-        # Substitute variable values
-        for var, value in self.variables.items():
-            condition = re.sub(rf"\b{re.escape(var)}\b", str(value), condition)
+        condition = condition.strip()
 
-        # AHK bare `=` → Python `==` (but leave !=, >=, <=, == untouched)
-        condition = re.sub(r'(?<![!<>=])=(?!=)', '==', condition)
+        if condition.startswith("(") and condition.endswith(")"):
+            condition = condition[1:-1]
 
-        # AHK `&&` / `||`  →  Python `and` / `or`
-        condition = condition.replace("&&", " and ").replace("||", " or ")
+        # Normalize operators
+        condition = self._normalize_condition(condition)
+
+        # Replace variables
+        condition = self._handle_variable(condition)
 
         try:
             return bool(eval(condition))
-        except Exception:
-            return False
+        except Exception as e:
+            error_msg = f"IF condition error:\n{condition}\n\n{e}"
+
+            print(f"[IF ERROR] {condition} → {e}")
+
+            # 🔥 Show MsgBox like AHK
+            messagebox.showerror("recording.ahk", error_msg)
+
+            # Optional: store error
+            self.add_error(condition, str(e))
+
+            # ❗ IMPORTANT: signal failure explicitly
+            return None
+    def _normalize_condition(self, condition):
+        # Replace <> with !=
+        condition = condition.replace("<>", "!=")
+
+        # Replace = with == ONLY when it's a comparison
+        condition = re.sub(r'(?<![<>=!])=(?!=)', '==', condition)
+
+        return condition
     # Playback
     def playback_action(self, action, speed=1.0):
         action = action.strip()
@@ -2383,7 +2511,7 @@ class App(CTk):
                 f.write("    SetBatchLines, -1\n")
                 f.write("    SetKeyDelay, -1\n")
                 f.write("    SetMouseDelay, -1\n")
-                f.write("    SetTitleMatchMode, \n")
+                f.write("    SetTitleMatchMode, 2\n")
                 f.write("    SendMode, Input\n")
                 f.write("    ; ---- Start of Macro ----\n")
 
@@ -2490,7 +2618,7 @@ class App(CTk):
 
         self.macro_running = False
         self.is_playing_back = False
-        self.release_all_keys()   # 🔥 IMPORTANT
+        self.release_all_keys()   # Important: IMPORTANT
         self.after(0, self.deiconify)
         self.set_status("Macro Status: Stopped Playback")
 if __name__ == "__main__":
