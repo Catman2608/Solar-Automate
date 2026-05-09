@@ -1297,11 +1297,11 @@ class App(CTk):
         )
         self.mouse_listener.daemon = True
         self.mouse_listener.start()
-    # ------------------------------------------------------------------
+    # 
     # Unified listeners – single keyboard + single mouse listener for
     # the whole app lifetime.  Dispatch to hotkey or recording logic
     # based on self.is_recording.
-    # ------------------------------------------------------------------
+    # 
     def _unified_key_press(self, key):
         """Single on_press handler: recording capture + hotkey dispatch."""
         if self.is_recording:
@@ -1451,9 +1451,9 @@ class App(CTk):
 
     def add_loop_end(self):
         self.recorded_actions.append("}")
-    # ------------------------------------------------------------------ #
-    #  PLAYBACK ENGINE                                                     #
-    # ------------------------------------------------------------------ #
+    
+    #  PLAYBACK ENGINE
+    
 
     def execute_script(self, actions, speed=1.0):
         """

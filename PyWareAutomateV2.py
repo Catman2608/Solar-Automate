@@ -1288,6 +1288,9 @@ class App(CTk):
         except KeyError:
             return key_string  # normal character keys
     def start_listeners(self):
+        """Unified listeners - single keyboard + single mouse listener for
+        the whole app lifetime.  Dispatch to hotkey or recording logic
+        based on self.is_recording."""
         try:
             self.key_listener = KeyListener(
                 on_press=self._unified_key_press,
@@ -1306,11 +1309,6 @@ class App(CTk):
             self.mouse_listener.start()
         except Exception as e:
             self.set_status(f"Mouse Listener not available: {e}")
-    # ------------------------------------------------------------------
-    # Unified listeners – single keyboard + single mouse listener for
-    # the whole app lifetime.  Dispatch to hotkey or recording logic
-    # based on self.is_recording.
-    # ------------------------------------------------------------------
     def _unified_key_press(self, key):
         """Single on_press handler: recording capture + hotkey dispatch."""
         if self.is_recording:
@@ -1460,10 +1458,8 @@ class App(CTk):
 
     def add_loop_end(self):
         self.recorded_actions.append("}")
-    # ------------------------------------------------------------------ #
-    #  PLAYBACK ENGINE                                                     #
-    # ------------------------------------------------------------------ #
-
+        
+    # PLAYBACK ENGINE
     def execute_script(self, actions, speed=1.0):
         """
         Top-level entry point.  Parses the flat action list into a tree of
@@ -1558,50 +1554,45 @@ class App(CTk):
         return nodes
 
     def _collect_block_body(self, actions, i, end):
-        """
-        Reads lines until the matching closing brace or until a keyword
-        that terminates the block (else / endif).
-        Returns (body_lines, new_i).
+            """
+            Reads lines until the matching closing brace or until a keyword
+            that terminates the block (else / endif).
+            Returns (body_lines, new_i).
 
-        Supports both brace-delimited  { … }  and brace-less (one-liners).
-        """
-        # Advance past optional opening brace on the *same* line as the keyword
-        # (already handled by normalization or consumed) or on the next line.
-        if i < end and actions[i].strip() == "{":
-            i += 1  # skip standalone opening brace
+            Supports both brace-delimited  { … }  and brace-less (one-liners).
+            """
+            if i < end and actions[i].strip() == "{":
+                i += 1  # skip standalone opening brace
 
-        # Walk forward and match braces
-        depth = 0
-        body_lines = []
-        while i < end:
-            stripped = actions[i].strip()
-            
-            # Handle braces
-            if stripped == "{":
-                depth += 1
-                i += 1
-                continue
-            
-            if stripped.startswith("}"):
-                if depth == 0:
-                    # If it's JUST "}", consume it. 
-                    # If it's "} else", don't consume it here, let _parse_if_node handle it.
-                    if stripped == "}":
-                        i += 1
+            depth = 0
+            body_lines = []
+            while i < end:
+                stripped = actions[i].strip()
+
+                if stripped == "{":
+                    depth += 1
+                    body_lines.append(stripped)  # keep inner braces for nested blocks
+                    i += 1
+                    continue
+
+                if stripped.startswith("}"):
+                    if depth == 0:
+                        if stripped == "}":
+                            i += 1
+                        break
+                    depth -= 1
+                    body_lines.append(stripped)  # keep inner braces for nested blocks
+                    i += 1
+                    continue
+
+                lower = stripped.lower()
+                if depth == 0 and (lower == "else" or lower.startswith("else ") or lower == "endif" or lower.startswith("endif ")):
                     break
-                depth -= 1
-                i += 1
-                continue
-                
-            lower = stripped.lower()
-            # If we're at depth 0, certain keywords terminate a brace-less block
-            if depth == 0 and (lower == "else" or lower.startswith("else ") or lower == "endif" or lower.startswith("endif ")):
-                break
-                
-            body_lines.append(stripped)
-            i += 1
 
-        return body_lines, i
+                body_lines.append(stripped)
+                i += 1
+
+            return body_lines, i
 
     def _parse_loop_node(self, actions, i, end):
         """Parse  Loop[, N]  { … }  and return (count, body_nodes, new_i)."""
@@ -2192,6 +2183,14 @@ class App(CTk):
 
         except Exception as e:
             self.add_error(action, str(e))
+    def _tap_key(self, key, hold_ms=12):
+        """
+        Emit a key press with a tiny hold so repeated navigation keys
+        are not collapsed by target apps when replayed via pynput.
+        """
+        keyboard_controller.press(key)
+        time.sleep(max(hold_ms, 0) / 1000.0)
+        keyboard_controller.release(key)
     def _cmd_send(self, action, speed):
         _, raw = action.split(",", 1)
         raw = raw.strip()
@@ -2204,8 +2203,7 @@ class App(CTk):
             key = self._string_to_key(key_name)
 
             if len(tokens) == 1:
-                keyboard_controller.press(key)
-                keyboard_controller.release(key)
+                self._tap_key(key)
 
             elif tokens[1] == "down":
                 keyboard_controller.press(key)
@@ -2224,28 +2222,24 @@ class App(CTk):
 
             if mod == "^":
                 keyboard_controller.press(Key.ctrl)
-                keyboard_controller.press(key)
-                keyboard_controller.release(key)
+                self._tap_key(key)
                 keyboard_controller.release(Key.ctrl)
 
             elif mod == "!":
                 keyboard_controller.press(Key.alt)
-                keyboard_controller.press(key)
-                keyboard_controller.release(key)
+                self._tap_key(key)
                 keyboard_controller.release(Key.alt)
 
             elif mod == "+":
                 keyboard_controller.press(Key.shift)
-                keyboard_controller.press(key)
-                keyboard_controller.release(key)
+                self._tap_key(key)
                 keyboard_controller.release(Key.shift)
 
             return
 
         key_raw = self._clean_ahk_braces(raw)
         key = self._string_to_key(key_raw)
-        keyboard_controller.press(key)
-        keyboard_controller.release(key)
+        self._tap_key(key)
     def _cmd_pixelsearch(self, action, speed):
         try:
             _, args = action.split(",", 1)
@@ -2265,13 +2259,15 @@ class App(CTk):
             tol_raw = parts[7].split()[0] if len(parts) > 7 else "8"
             tolerance = int(tol_raw)
 
-            # --- Wait for capture frame (prevents blank reads) ---
-            if hasattr(self, "_cap_event"):
-                self._cap_event.wait(timeout=0.2)
-
-            frame = self.get_latest_frame()
-
-            if frame is None:
+            # --- Grab frame: use capture thread if running, else one-shot ---
+            if self.capture_running and hasattr(self, "_cap_lock"):
+                # Wait up to 200 ms for the capture thread to produce a frame
+                if hasattr(self, "_cap_event"):
+                    self._cap_event.wait(timeout=0.2)
+                with self._cap_lock:
+                    frame = self._cap_frame.copy() if self._cap_frame is not None else None
+            else:
+                # Capture thread is stopped — grab a fresh frame on-demand
                 thread_local = threading.local()
                 frame = self._grab_screen_full(thread_local)
 
@@ -2546,8 +2542,6 @@ class App(CTk):
     def start_playback(self):
         # print("Macro Status: Started Playback")
         self.macro_running = True
-        time.sleep(1) # to prevent macro never runs
-
         # Load actions from file (handles both .ahk and .txt, skips headers/comments)
         self.after(0, self.load_recording_file)
         time.sleep(0.1)  # brief wait for the main-thread call to complete

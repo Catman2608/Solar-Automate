@@ -604,11 +604,11 @@ class App(CTk):
             return Key[key_string]
         except KeyError:
             return key_string  # normal character keys
-    # ------------------------------------------------------------------
+    # 
     # Unified listeners – single keyboard + single mouse listener for
     # the whole app lifetime.  Dispatch to hotkey or recording logic
     # based on self.is_recording.
-    # ------------------------------------------------------------------
+    # 
     def _unified_key_press(self, key):
         """Single on_press handler: recording capture + hotkey dispatch."""
         if self.is_recording:
@@ -733,50 +733,109 @@ class App(CTk):
 
             # ---- LOOP ----
             if line.startswith("Loop"):
-                try:
-                    # Extract loop count safely
-                    count_part = line.split(",")[1].strip()
-                    count = int(count_part.split()[0])  # handles "2 {" case
-                except:
-                    count = 1
+                count = self._evaluate_loop_count(line)
 
-                block = []
+                block, i = self._extract_block(actions, i)
 
-                # --- Detect inline { ---
-                if "{" in line:
-                    brace_depth = 1
-                    i += 1
-                else:
-                    i += 1
-                    if i < len(actions) and actions[i].strip() == "{":
-                        brace_depth = 1
-                        i += 1
-                    else:
-                        brace_depth = 0
-
-                # --- Collect block ---
-                while i < len(actions) and brace_depth > 0:
-                    current = actions[i].strip()
-
-                    if "{" in current:
-                        brace_depth += current.count("{")
-                    if "}" in current:
-                        brace_depth -= current.count("}")
-                        if brace_depth <= 0:
-                            break
-
-                    block.append(actions[i])
-                    i += 1
-
-                # --- Execute loop ---
                 for _ in range(count):
                     self.execute_script(block, speed)
+
+                continue
 
             else:
                 self.playback_action(line, speed)
 
             i += 1
     # Playback functions
+    def _extract_block(self, actions, start_index):
+        """
+        Extracts a { ... } block starting after a Loop/If/etc statement.
+
+        Returns:
+            (block_lines, ending_index)
+        """
+
+        block = []
+
+        i = start_index
+
+        line = actions[i].strip()
+
+        # ---------------------------------
+        # Detect opening brace
+        # ---------------------------------
+
+        if "{" in line:
+            brace_depth = line.count("{") - line.count("}")
+            i += 1
+
+        else:
+            i += 1
+
+            if i >= len(actions):
+                return [], i
+
+            next_line = actions[i].strip()
+
+            if next_line == "{":
+                brace_depth = 1
+                i += 1
+            else:
+                # Single-line loop
+                return [actions[i]], i
+
+        # ---------------------------------
+        # Collect block
+        # ---------------------------------
+
+        while i < len(actions) and brace_depth > 0:
+
+            current = actions[i]
+            stripped = current.strip()
+
+            open_count = stripped.count("{")
+            close_count = stripped.count("}")
+
+            brace_depth += open_count
+            brace_depth -= close_count
+
+            # Don't include pure closing braces
+            if stripped != "}":
+                block.append(current)
+
+            i += 1
+
+        return block, i - 1
+    def _evaluate_loop_count(self, line):
+        """
+        Evaluates:
+            Loop, 5
+            Loop, %Amount%
+            Loop
+        """
+
+        try:
+            parts = line.split(",", 1)
+
+            # Infinite/default loop style
+            if len(parts) < 2:
+                return 1
+
+            count_part = parts[1].replace("{", "").strip()
+
+            # Variable dereference
+            if count_part.startswith("%") and count_part.endswith("%"):
+                var_name = count_part[1:-1]
+
+                value = self.variables.get(var_name, 1)
+
+                return int(value)
+
+            return int(count_part.split()[0])
+
+        except Exception as e:
+            print(f"[LOOP ERROR] {line} → {e}")
+            return 1
     def _clean_ahk_braces(self, key_raw):
         # Remove braces like {Enter}, {Down}, {Space}
         key_raw = key_raw.strip()
@@ -805,6 +864,14 @@ class App(CTk):
                 keyboard_controller.release(key)
             except:
                 pass
+    def _tap_key(self, key, hold_ms=12):
+        """
+        Emit a key press with a tiny hold so repeated navigation keys
+        are not collapsed by target apps when replayed via pynput.
+        """
+        keyboard_controller.press(key)
+        time.sleep(max(hold_ms, 0) / 1000.0)
+        keyboard_controller.release(key)
     def playback_action(self, action, speed=1.0):
         action = action.strip()
         # Others: MouseMove, Click, Send
@@ -888,8 +955,7 @@ class App(CTk):
 
                     # --- {key} ---
                     if len(tokens) == 1:
-                        keyboard_controller.press(key)
-                        keyboard_controller.release(key)
+                        self._tap_key(key)
 
                     # --- {key down} ---
                     elif tokens[1].lower() == "down":
@@ -911,26 +977,22 @@ class App(CTk):
 
                     if mod == "^":
                         keyboard_controller.press(Key.ctrl)
-                        keyboard_controller.press(key)
-                        keyboard_controller.release(key)
+                        self._tap_key(key)
                         keyboard_controller.release(Key.ctrl)
                     elif mod == "!":
                         keyboard_controller.press(Key.alt)
-                        keyboard_controller.press(key)
-                        keyboard_controller.release(key)
+                        self._tap_key(key)
                         keyboard_controller.release(Key.alt)
                     elif mod == "+":
                         keyboard_controller.press(Key.shift)
-                        keyboard_controller.press(key)
-                        keyboard_controller.release(key)
+                        self._tap_key(key)
                         keyboard_controller.release(Key.shift)
                     return
 
                 # --- FALLBACK ---
                 key_raw = self._clean_ahk_braces(raw)
                 key = self._string_to_key(key_raw)
-                keyboard_controller.press(key)
-                keyboard_controller.release(key)
+                self._tap_key(key)
 
             except Exception as e:
                 self.add_error(action, str(e))

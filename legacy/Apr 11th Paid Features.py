@@ -591,11 +591,11 @@ class App(CTk):
             return Key[key_string]
         except KeyError:
             return key_string  # normal character keys
-    # ------------------------------------------------------------------
+    # 
     # Unified listeners – single keyboard + single mouse listener for
     # the whole app lifetime.  Dispatch to hotkey or recording logic
     # based on self.is_recording.
-    # ------------------------------------------------------------------
+    # 
     def _unified_key_press(self, key):
         """Single on_press handler: recording capture + hotkey dispatch."""
         if self.is_recording:
