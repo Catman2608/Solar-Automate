@@ -28,6 +28,10 @@ import sys
 # Initialize controllers
 keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
+
+class PlaybackError(Exception):
+    """Raised immediately when a playback command fails, stopping the script."""
+    pass
 # AHK scan-code → key mapping (MODULE LEVEL)
 SC_TO_KEY = {
     "sc3b": "f1",
@@ -393,9 +397,12 @@ class App(CTk):
             "click": self._cmd_click,
             "send": self._cmd_send,
             "pixelsearch": self._cmd_pixelsearch,
+            "pixelgetcolor": self._cmd_pixelgetcolor,
+            "mousegetpos": self._cmd_mousegetpos,
             "startcapturethread": self._cmd_startcapturethread,
             "stopcapturethread": self._cmd_stopcapturethread,
             "msgbox": self._cmd_msgbox,
+            "tooltip": self._cmd_tooltip,
             # "if" and "else" are handled structurally by execute_script/
             # _parse_if_node — they never reach the dispatch map.
         }
@@ -435,7 +442,6 @@ class App(CTk):
         self._init_builtin_variables()
 
         # Handle AHK errors
-        self.playback_errors = []
         self.held_keys = set()
 
         # Create Window
@@ -1543,6 +1549,22 @@ class App(CTk):
                                "then": then_nodes, "else_": else_nodes})
                 continue
 
+            # ---- Try / Catch ----
+            if re.match(r"^try\b", lower):
+                result = self._parse_try_catch(actions, i)
+                if result is None:
+                    raise PlaybackError(f"Invalid TRY/CATCH block starting at: {actions[i]}")
+                try_nodes = self._parse_block(result["try_block"], 0, len(result["try_block"]))
+                catch_nodes = self._parse_block(result["catch_block"], 0, len(result["catch_block"]))
+                nodes.append({
+                    "kind": "try",
+                    "try": try_nodes,
+                    "catch": catch_nodes,
+                    "catch_var": result.get("catch_var"),
+                })
+                i = result["end_index"]
+                continue
+
             # ---- Else / EndIf / closing brace → handled by callers ----
             if lower in ("else", "endif") or raw == "}":
                 break
@@ -1729,6 +1751,18 @@ class App(CTk):
                 else:
                     self._exec_block(node["else_"], speed)
 
+            elif kind == "try":
+                try:
+                    self._exec_block(node["try"], speed)
+                except PlaybackError as e:
+                    if node["catch"]:
+                        catch_var = node.get("catch_var")
+                        if catch_var:
+                            self.variables[catch_var] = str(e)
+                        self._exec_block(node["catch"], speed)
+                    else:
+                        raise
+
     def _exec_line(self, line, speed):
         """Execute a single resolved action line."""
         # Variable assignment  (x := expr)
@@ -1753,8 +1787,7 @@ class App(CTk):
 
             # ❌ Block built-in overwrite
             if var in self.builtin_variables:
-                self.add_error(action, f"Cannot overwrite built-in variable: {var}")
-                return True
+                self.raise_error(action, f"Cannot overwrite built-in variable: {var}")
 
             try:
                 self.variables[var] = eval(value)
@@ -1892,17 +1925,15 @@ class App(CTk):
             key_raw = key_raw[1:-1]  # strip {}
 
         return key_raw.lower()
-    def add_error(self, action, description="Syntax error"):
-        self.playback_errors.append(
+    def raise_error(self, action, description="Syntax error"):
+        msg = (
             f"Error: The script contains syntax errors.\n"
             f"Specifically:\n"
             f"    {action}\n"
-            f"    {description}\n"
+            f"    {description}"
         )
-        print(f"Error: The script contains syntax errors.",
-            f"Specifically:",
-            f"    {action}",
-            f"    {description}")
+        print(f"[PlaybackError] {action} -> {description}")
+        raise PlaybackError(msg)
     def release_all_keys(self):
         for key in list(self.held_keys):
             try:
@@ -2104,6 +2135,49 @@ class App(CTk):
             return None
 
         return None
+    def _parse_try_catch(self, actions, start_index):
+        """
+        Parses AHK-style try/catch blocks:
+
+        try {
+            ...
+        }
+        catch e {
+            ...
+        }
+        """
+        header = actions[start_index].strip()
+        if not re.match(r"^try\b", header, re.IGNORECASE):
+            return None
+
+        i = start_index + 1
+        if i < len(actions) and actions[i].strip() == "{":
+            i += 1
+
+        try_block, i = self._collect_block_body(actions, i, len(actions))
+
+        catch_block = []
+        catch_var = None
+
+        if i < len(actions):
+            catch_line = actions[i].strip()
+            match = re.match(r"^catch\b\s*([A-Za-z_]\w*)?", catch_line, re.IGNORECASE)
+
+            if match:
+                catch_var = match.group(1)
+                i += 1
+
+                if i < len(actions) and actions[i].strip() == "{":
+                    i += 1
+
+                catch_block, i = self._collect_block_body(actions, i, len(actions))
+
+        return {
+            "try_block": try_block,
+            "catch_block": catch_block,
+            "catch_var": catch_var,
+            "end_index": i
+        }
     def _init_builtin_variables(self):
         import sys
 
@@ -2181,8 +2255,10 @@ class App(CTk):
                 # Default = full click
                 mouse_controller.click(button)
 
+        except PlaybackError:
+            raise
         except Exception as e:
-            self.add_error(action, str(e))
+            self.raise_error(action, str(e))
     def _tap_key(self, key, hold_ms=12):
         """
         Emit a key press with a tiny hold so repeated navigation keys
@@ -2316,8 +2392,72 @@ class App(CTk):
                 self.variables[out_y] = -1
                 self.variables["ErrorLevel"] = 1
 
+        except PlaybackError:
+            raise
         except Exception as e:
-            self.add_error(action, str(e))
+            self.raise_error(action, str(e))
+    def _cmd_pixelgetcolor(self, action, speed):
+        # AHK: PixelGetColor, OutputVar, X, Y [, RGB]
+        try:
+            _, args = action.split(",", 1)
+            parts = [p.strip() for p in args.split(",")]
+
+            out_var = parts[0]
+            x = int(parts[1])
+            y = int(parts[2])
+
+            # --- Grab frame: use capture thread if running, else one-shot ---
+            if self.capture_running and hasattr(self, "_cap_lock"):
+                if hasattr(self, "_cap_event"):
+                    self._cap_event.wait(timeout=0.2)
+                with self._cap_lock:
+                    frame = self._cap_frame.copy() if self._cap_frame is not None else None
+            else:
+                thread_local = threading.local()
+                frame = self._grab_screen_full(thread_local)
+
+            if frame is None:
+                self.variables[out_var] = 0
+                self.variables["ErrorLevel"] = 1
+                return
+
+            h, w = frame.shape[:2]
+            x = max(0, min(x, w - 1))
+            y = max(0, min(y, h - 1))
+
+            # frame is BGR (from mss): index [y, x] -> (B, G, R)
+            b, g, r = int(frame[y, x, 0]), int(frame[y, x, 1]), int(frame[y, x, 2])
+
+            # AHK PixelGetColor returns 0xBBGGRR
+            color_val = (b << 16) | (g << 8) | r
+            self.variables[out_var] = f"0x{color_val:06X}"
+            self.variables["ErrorLevel"] = 0
+
+        except PlaybackError:
+            raise
+        except Exception as e:
+            self.raise_error(action, str(e))
+
+    def _cmd_mousegetpos(self, action, speed):
+        # AHK: MouseGetPos [, OutX, OutY]
+        try:
+            parts = []
+            if "," in action:
+                _, args = action.split(",", 1)
+                parts = [p.strip() for p in args.split(",")]
+
+            out_x = parts[0] if len(parts) > 0 else "MouseX"
+            out_y = parts[1] if len(parts) > 1 else "MouseY"
+
+            pos = mouse_controller.position
+            self.variables[out_x] = int(pos[0])
+            self.variables[out_y] = int(pos[1])
+
+        except PlaybackError:
+            raise
+        except Exception as e:
+            self.raise_error(action, str(e))
+
     def _cmd_startcapturethread(self, action, speed):
         self.start_capture_thread()
 
@@ -2358,8 +2498,89 @@ class App(CTk):
             # Show messagebox
             messagebox.showinfo(title if title else "recording.ahk", text)
 
+        except PlaybackError:
+            raise
         except Exception as e:
-            self.add_error(action, str(e))
+            self.raise_error(action, str(e))
+    def _cmd_tooltip(self, action, speed):
+        """
+        Parse AHK syntax
+        ToolTip, Text, X, Y, ID
+        """
+        try:
+            _, args = action.split(",", 1)
+            parts = [self._handle_variable(p.strip()) for p in args.split(",")]
+            text = parts[0] if len(parts) > 0 else ""
+
+            x = int(float(parts[1])) if len(parts) > 1 and parts[1] else \
+                self.variables.get("MouseX", 0)
+
+            y = int(float(parts[2])) if len(parts) > 2 and parts[2] else \
+                self.variables.get("MouseY", 0)
+
+            tooltip_id = int(parts[3]) if len(parts) > 3 and parts[3] else 1
+
+            # -------------------------
+            # Destroy existing tooltip with same ID
+            # -------------------------
+
+            if not hasattr(self, "_tooltips"):
+                self._tooltips = {}
+
+            old_tooltip = self._tooltips.get(tooltip_id)
+
+            if old_tooltip:
+                try:
+                    old_tooltip.destroy()
+                except:
+                    pass
+
+            # -------------------------
+            # Create tooltip window
+            # -------------------------
+
+            tooltip = CTkToplevel()
+
+            tooltip.overrideredirect(True)
+            tooltip.attributes("-topmost", True)
+
+            # Classic AHK pale yellow
+            bg_color = "#FFFFE1"
+
+            tooltip.configure(fg_color=bg_color)
+
+            # -------------------------
+            # Tooltip label
+            # -------------------------
+
+            label = CTkLabel(
+                tooltip,
+                text=text,
+                fg_color=bg_color,
+                text_color="black",
+                corner_radius=0,   # IMPORTANT
+                padx=4,
+                pady=1,
+                font=("Segoe UI", 8)
+            )
+
+            label.pack()
+
+            # Thin border frame look
+            tooltip.configure(border_width=1)
+            tooltip.configure(border_color="#808080")
+
+            # Exact positioning like AHK
+            tooltip.geometry(f"+{x}+{y}")
+
+            # Save tooltip by ID
+            self._tooltips[tooltip_id] = tooltip
+
+        except PlaybackError:
+            raise
+
+        except Exception as e:
+            self.raise_error(action, str(e))
     # _cmd_if and _cmd_else have been removed.
     # Conditional logic is now handled structurally by _parse_if_node /
     # _exec_block, so "If" lines never reach the dispatch map.
@@ -2388,18 +2609,7 @@ class App(CTk):
         try:
             return bool(eval(condition))
         except Exception as e:
-            error_msg = f"IF condition error:\n{condition}\n\n{e}"
-
-            print(f"[IF ERROR] {condition} → {e}")
-
-            # 🔥 Show MsgBox like AHK
-            messagebox.showerror("recording.ahk", error_msg)
-
-            # Optional: store error
-            self.add_error(condition, str(e))
-
-            # ❗ IMPORTANT: signal failure explicitly
-            return None
+            self.raise_error(condition, f"IF condition error: {e}")
     def _normalize_condition(self, condition):
         # Replace <> with !=
         condition = condition.replace("<>", "!=")
@@ -2436,11 +2646,13 @@ class App(CTk):
         if handler:
             try:
                 handler(action, speed)
+            except PlaybackError:
+                raise
             except Exception as e:
-                self.add_error(action, str(e))
+                self.raise_error(action, str(e))
             return
 
-        self.add_error(action, "Unknown or unsupported command")
+        self.raise_error(action, "Unknown or unsupported command")
     def start_recording(self):
         print("Macro Status: Recording...")
         self.macro_running = True
@@ -2576,36 +2788,41 @@ class App(CTk):
 
         loop_count = 0
         self.is_playing_back = True  # suppress hotkey processing during playback
+        playback_error_msg = None
 
         # ---- PLAYBACK LOOP ----
-        while self.macro_running and (infinite_loop or loop_count < loops):
+        try:
+            while self.macro_running and (infinite_loop or loop_count < loops):
 
-            loop_count += 1
-            # print(f"Starting loop {loop_count}")
+                loop_count += 1
+                # print(f"Starting loop {loop_count}")
 
-            # Play all actions
-            self.execute_script(self.recorded_actions, speed)
+                # Play all actions
+                self.execute_script(self.recorded_actions, speed)
 
-            if not self.macro_running:
-                break
+                if not self.macro_running:
+                    break
 
-            # If there is an interval → wait before next loop
-            if interval_seconds > 0 and (infinite_loop or loop_count < loops):
-                # print(f"Waiting {interval_seconds} seconds before next loop...")
-                time.sleep(interval_seconds)
+                # If there is an interval → wait before next loop
+                if interval_seconds > 0 and (infinite_loop or loop_count < loops):
+                    # print(f"Waiting {interval_seconds} seconds before next loop...")
+                    time.sleep(interval_seconds)
+
+        except PlaybackError as e:
+            playback_error_msg = str(e)
 
         # finished looping
         self.is_playing_back = False
-        self.set_status("Macro Status: Stopped Playback (Done)")
         self.macro_running = False
-        # Check for errors
-        if self.playback_errors:
-            errors_text = "\n".join(self.playback_errors)
-            self.playback_errors.clear()
-            messagebox.showerror("Script Error", errors_text)
-        self.after(0, self.deiconify)
         self.release_all_keys()
         self.force_release_modifiers()
+        if playback_error_msg:
+            self.set_status("Macro Status: Stopped (Error)")
+            self.after(0, self.deiconify)
+            messagebox.showerror("Script Error", playback_error_msg)
+        else:
+            self.set_status("Macro Status: Stopped Playback (Done)")
+            self.after(0, self.deiconify)
     def stop_playback(self):
         if not self.macro_running:
             return
