@@ -133,8 +133,8 @@ os.makedirs(IMAGES_PATH, exist_ok=True)
 
 # Terms Of Service Dialogue
 class TermsOfServiceDialog(CTkToplevel):
-    def __init__(self, parent=None):
-        super().__init__()
+    def __init__(self, parent=None, show_setup=True):
+        super().__init__(parent)
         
         # Screen Size (Cache Once – Thread Safe)
         self.SCREEN_WIDTH = self.winfo_screenwidth()
@@ -142,8 +142,9 @@ class TermsOfServiceDialog(CTkToplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Window
+        self.configure(fg_color="#181836")   # <- Main Window Ultra Dark
         self.geometry("750x600")
-        self.title("PyWare Automate V2.0 - Terms of Use")
+        self.title("PyWare Automate V2 - Terms of Service")
         self.minsize(650, 500)
         
         # Center Window
@@ -173,18 +174,14 @@ class TermsOfServiceDialog(CTkToplevel):
         logo_label.grid(row=0, column=0, sticky="w")
 
         # Main Content Container
-        self.container = CTkFrame(self)
+        self.container = CTkFrame(self, border_color = "#364167", fg_color = "#222244") # 181836
         self.container.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
 
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
 
         # Pages
-        self.page_tos = CTkFrame(self.container)
-        self.page_setup = CTkFrame(self.container)
-
-        for page in (self.page_tos, self.page_setup):
-            page.grid(row=0, column=0, sticky="nsew")
+        self.page_tos = CTkFrame(self.container, border_color = "#364167", fg_color = "#222244")
 
         # Agree Labels
         self.agree_var = BooleanVar(value=False)
@@ -192,31 +189,46 @@ class TermsOfServiceDialog(CTkToplevel):
 
         # Build Pages
         self.build_tos_page(self.page_tos)
-        self.build_setup_page(self.page_setup)
+        self.page_tos.grid(row=0, column=0, sticky="nsew")
 
         # Navigation Bar
-        nav_bar = CTkFrame(self)
+        nav_bar = CTkFrame(self, border_color="#364167", fg_color="#181836")
         nav_bar.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
 
-        nav_bar.grid_columnconfigure(0, weight=1)
+        nav_bar.grid_columnconfigure((0, 1), weight=1)
 
-        self.back_btn = CTkButton(nav_bar, text="Back", command=self.go_back)
-        self.next_btn = CTkButton(nav_bar, text="Next", command=self.go_next)
-        self.finish_btn = CTkButton(nav_bar, text="Finish", command=self.finish)
+        # Decline Button
+        self.back_btn = CTkButton(
+            nav_bar,
+            text="Decline",
+            command=self.on_close
+        )
+
+        # Accept Button
+        self.next_btn = CTkButton(
+            nav_bar,
+            text="Accept",
+            command=self.accept_terms,
+            state="disabled"
+        )
 
         self.back_btn.grid(row=0, column=0, padx=5, sticky="w")
-        self.next_btn.grid(row=0, column=1, padx=5)
-        self.finish_btn.grid(row=0, column=2, padx=5, sticky="e")
-
-        # Initial State
-        self.current_page = 0
-        self.show_page(0)
+        self.next_btn.grid(row=0, column=1, padx=5, sticky="e")
     # Basic Settings Tab
     def build_tos_page(self, parent):
         parent.grid_rowconfigure(0, weight=1)
+        parent.grid_rowconfigure(1, weight=0)
         parent.grid_columnconfigure(0, weight=1)
 
-        textbox = CTkTextbox(parent, wrap="word")
+        textbox = CTkTextbox(
+            parent,
+            wrap="word",
+            border_color="#364167",
+            fg_color="#222244",
+            text_color="#E8EAF6",
+            scrollbar_button_color="#364167",
+            scrollbar_button_hover_color="#4B5A8A"
+        )
         textbox.grid(row=0, column=0, padx=12, pady=10, sticky="nsew")
 
         textbox.insert("1.0", """
@@ -227,13 +239,13 @@ By using this software, you agree to the following:
 
 ⚡ 1. USAGE & MODIFICATION
 
-✅ YOU ARE ALLOWED TO:
+Allowed:
 Use these macros for personal purposes.
 Study and reverse engineer the code for educational purposes.
 Modify the code for your own personal use.
 Share your modifications with proper attribution.
                             
-❌ YOU ARE NOT ALLOWED TO:
+Forbidden:
 Repackage or redistribute this software as your own.
 Remove or modify credits to the author (Catman2608).
 Sell or monetize this software or its derivatives.
@@ -280,7 +292,7 @@ If you share, modify, or redistribute this software:
 These terms may be updated at any time.
 Continued use of the software from the PyWare Automate website constitutes acceptance of the updated terms.
                             
-✅ 7. ACCEPTANCE
+⚡ 7. ACCEPTANCE
 
 By accepting the terms, you acknowledge that you have read, understood, and agree to these Terms of Use.
 If you do not agree, please remove the software from your device.
@@ -292,52 +304,48 @@ If you do not agree, please remove the software from your device.
         checkbox = CTkCheckBox(
             parent,
             text="I agree to the Terms of Service",
+            text_color="#E8EAF6",
+            fg_color="#4B7BEC",
+            hover_color="#3867D6",
+            border_color="#AAB2D5",
             variable=self.agree_var,
             command=self.update_next_button
         )
         checkbox.grid(row=1, column=0, padx=12, pady=(0, 10), sticky="w")
     # Second Tab
     def build_setup_page(self, parent):
-        textbox = CTkTextbox(parent, wrap="word")
-        textbox.pack(fill="both", expand=True, padx=12, pady=10)
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
 
-        textbox.insert("1.0", """
-Step 1: Download and extract the config pack and images pack from https://drive.google.com/drive/folders/1e9tZwDtAaiYKTVFeArjWTIuztLgLg88a?usp=drive_link
-Step 2: Click Open Base Folder to open the base folder
-Step 3: Paste the configs pack in the configs folder
-Step 4: Paste the images pack in the images folder
-Step 5: Change Bar Areas
+        # ── Info text ────────────────────────────────────────────────────
+        textbox = CTkTextbox(parent, wrap="word", border_color="#364167",
+                             fg_color="#222244", height=220)
+        textbox.grid(row=0, column=0, padx=12, pady=(10, 6), sticky="nsew")
+
+        textbox.insert("1.0", """Setup Guide
+
+Would you like to automatically download and install the Config Pack and Image Pack?
+
+• YES  – The app will download configs.zip and images.zip from Google Drive
+         and place them in the correct folders for you automatically.
+
+• NO   – Skip the download. You can install packs manually later:
+         Step 1: Download configs.zip and images.zip from the Drive link below.
+         Step 2: Click "Open Base Folder" to locate your install directory.
+         Step 3: Extract configs.zip into the  configs/  folder.
+         Step 4: Extract images.zip  into the  images/  folder.
+         Step 5: Set up your Bar Areas in the main app.
+
+Drive link: https://drive.google.com/drive/folders/1pDSSKYRmMHQcv2SSrMxfzcGz4mgY-esS
         """)
         textbox.configure(state="disabled")
-    def show_page(self, index):
-        self.current_page = index
-
-        if index == 0:
-            self.page_tos.tkraise()
-            self.back_btn.configure(state="disabled")
-            self.next_btn.configure(state="normal" if self.agree_var.get() else "disabled")
-            self.finish_btn.configure(state="disabled")
-        elif index == 1:
-            self.page_setup.tkraise()
-            self.back_btn.configure(state="normal")
-            self.next_btn.configure(state="disabled")
-            self.finish_btn.configure(state="normal")
-
-    def go_back(self):
-        if self.current_page == 1:
-            self.show_page(0)
-
     def update_next_button(self):
-        if self.current_page == 0:
-            self.next_btn.configure(state="normal" if self.agree_var.get() else "disabled")
-
-    def go_next(self):
-        if self.current_page == 0 and self.agree_var.get():
-            self.accepted = True
-            self.show_page(1)
-
-    def finish(self):
+        self.next_btn.configure(
+            state="normal" if self.agree_var.get() else "disabled"
+        )
+    def accept_terms(self):
         self.accepted = True
+        # Close TOS window
         self.destroy()
     def on_close(self):
         if not self.accepted:
@@ -426,14 +434,15 @@ class App(CTk):
             # Mark Accepted
             state["tos_accepted"] = True
 
-        # Update Version After Tos
+        # Update Version After TOS
         state["version"] = APP_VERSION
 
         self.save_app_state(state)
 
         # Start Hotkey Listener
-        self.key_listener = None
-        self.after(100, self.start_listeners)
+        self.key_listener = KeyListener(on_press=self.on_key_press)
+        self.key_listener.daemon = True
+        self.key_listener.start()
 
         # Save and load to TXT
         self.recorded_actions = []
@@ -1293,28 +1302,6 @@ class App(CTk):
             return Key[key_string]
         except KeyError:
             return key_string  # normal character keys
-    def start_listeners(self):
-        """Unified listeners - single keyboard + single mouse listener for
-        the whole app lifetime.  Dispatch to hotkey or recording logic
-        based on self.is_recording."""
-        try:
-            self.key_listener = KeyListener(
-                on_press=self._unified_key_press,
-                on_release=self._unified_key_release
-            )
-            self.key_listener.daemon = True
-            self.key_listener.start()
-        except Exception as e:
-            self.set_status(f"Key Listener not available: {e}")
-        try:
-            self.mouse_listener = mouse.Listener(
-                on_click=self._unified_mouse_click,
-                on_move=self._unified_mouse_move
-            )
-            self.mouse_listener.daemon = True
-            self.mouse_listener.start()
-        except Exception as e:
-            self.set_status(f"Mouse Listener not available: {e}")
     def _unified_key_press(self, key):
         """Single on_press handler: recording capture + hotkey dispatch."""
         if self.is_recording:
@@ -2209,50 +2196,76 @@ class App(CTk):
         x, y = [int(v.strip()) for v in args.split(",")]
         mouse_controller.position = (x, y)
     def _cmd_click(self, action, speed):
+        """
+        Supports AHK Click syntax variants:
+          Click                          → left click at current pos
+          Click, X, Y                    → left click at X, Y
+          Click, X, Y, Down Right        → press right button at X, Y
+          Click, Down                    → press left button at current pos
+          Click, Right                   → right click at current pos
+          Click, Down Right              → press right button at current pos
+          (any combination of optional X, Y, Down/Up, Left/Right/Middle)
+        """
         try:
-            _, args = action.split(",", 1)
-            parts = [p.strip() for p in args.split(",")]
-
-            # --- REQUIRED ---
-            if len(parts) < 2:
-                raise ValueError("Click requires at least x and y")
-
-            x = int(float(parts[0]))
-            y = int(float(parts[1]))
-
-            # --- DEFAULT BEHAVIOR (AHK style) ---
-            down_up = "click"
-            btn = "left"
-
-            # --- OPTIONAL EVENT ---
-            if len(parts) >= 3:
-                event = parts[2].split()
-
-                if len(event) >= 1:
-                    down_up = event[0].lower()
-
-                if len(event) >= 2:
-                    btn = event[1].lower()
-
-            # --- MAP BUTTON ---
-            if btn in ("left", "l"):
-                button = mouse.Button.left
-            elif btn in ("right", "r"):
-                button = mouse.Button.right
-            elif btn in ("middle", "m"):
-                button = mouse.Button.middle
+            # Split off the command name; args may be empty
+            if "," in action:
+                _, args = action.split(",", 1)
+                parts = [p.strip() for p in args.split(",")]
             else:
-                return
+                parts = []
 
-            mouse_controller.position = (x, y)
+            # Classify each token: numeric → coordinate, else → modifier word
+            # AHK order: [X, Y,] [Down|Up] [Left|Right|Middle]
+            coords = []
+            modifiers = []
+            for p in parts:
+                if p == "":
+                    continue
+                try:
+                    coords.append(int(float(p)))
+                except ValueError:
+                    # Could be "Down Right" in one comma-field, split on spaces
+                    for word in p.split():
+                        modifiers.append(word.lower())
 
-            # --- EXECUTE ---
+            # Resolve X, Y
+            if len(coords) >= 2:
+                x, y = coords[0], coords[1]
+                move = True
+            else:
+                move = False   # stay at current cursor position
+
+            # Resolve button and down/up from modifier words
+            btn_map = {
+                "left": mouse.Button.left,
+                "l":    mouse.Button.left,
+                "right": mouse.Button.right,
+                "r":    mouse.Button.right,
+                "middle": mouse.Button.middle,
+                "m":    mouse.Button.middle,
+            }
+            direction_words = {"down", "up"}
+            button_words    = set(btn_map.keys())
+
+            down_up = "click"   # default: full click
+            button  = mouse.Button.left  # default button
+
+            for word in modifiers:
+                if word in direction_words:
+                    down_up = word
+                elif word in button_words:
+                    button = btn_map[word]
+
+            # Move if coordinates were supplied
+            if move:
+                mouse_controller.position = (x, y)
+
+            # Execute
             if down_up == "down":
                 mouse_controller.press(button)
             elif down_up == "up":
                 mouse_controller.release(button)
             else:
-                # Default = full click
                 mouse_controller.click(button)
 
         except PlaybackError:
@@ -2559,8 +2572,8 @@ class App(CTk):
                 fg_color=bg_color,
                 text_color="black",
                 corner_radius=0,   # IMPORTANT
-                padx=4,
-                pady=1,
+                padx=1,
+                pady=0,
                 font=("Segoe UI", 8)
             )
 
