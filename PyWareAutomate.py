@@ -761,9 +761,9 @@ class App(CTk):
 
         line = actions[i].strip()
 
-        # ---------------------------------
+        --------
         # Detect opening brace
-        # ---------------------------------
+        --------
 
         if "{" in line:
             brace_depth = line.count("{") - line.count("}")
@@ -784,9 +784,9 @@ class App(CTk):
                 # Single-line loop
                 return [actions[i]], i
 
-        # ---------------------------------
+        --------
         # Collect block
-        # ---------------------------------
+        --------
 
         while i < len(actions) and brace_depth > 0:
 
