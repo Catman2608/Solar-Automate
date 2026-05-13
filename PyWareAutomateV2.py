@@ -1,5 +1,6 @@
 # Imports
 from customtkinter import *
+import tkinter as tk
 from tkinter import messagebox
 import os
 import subprocess
@@ -31,6 +32,14 @@ mouse_controller = MouseController()
 
 class PlaybackError(Exception):
     """Raised immediately when a playback command fails, stopping the script."""
+    pass
+
+class AhkBreak(Exception):
+    """Internal signal for AHK break statements."""
+    pass
+
+class AhkContinue(Exception):
+    """Internal signal for AHK continue statements."""
     pass
 # AHK scan-code → key mapping (MODULE LEVEL)
 SC_TO_KEY = {
@@ -365,6 +374,7 @@ class App(CTk):
         self.comboboxes = {} # Save Combobox Widgets Here For Dynamic Updates
         self.switches = {} # Save Ctkswitch Widgets Here For Load/Save
         self.variables = {} # Save variables for AHK playback
+        self._tooltips = {}
 
         # Store Screen Width And Height To Use Later
         self.SCREEN_WIDTH = self.winfo_screenwidth()
@@ -394,6 +404,12 @@ class App(CTk):
         self._monitor = {}      # Pre-Allocated Monitor Dict, Reused Every Grab
         self._scale_cache = None  # Cached Dpi Scale Factor
         self.capture_stop_event = threading.Event()
+        # Buffer For Capture/Logic Thread Decoupling (Used In Start_Macro())
+        self._cap_lock = threading.Lock()
+        self._cap_frame = None    # Latest Full Screen Frame
+        self._cap_event = threading.Event()  # Signals A New Frame Pair Is Ready
+        self._active_capture_stop = None  # Stop Event For The Currently Running Capture Thread
+        self._active_capture_thread = None  # Thread Object For The Currently Running Capture Thread
 
         # Safe Defaults Before Key Listener Starts (Will Be Overwritten By Load_Misc_Settings)
         self.bar_areas = {"shake": None, "fish": None, "friend": None, "totem": None}
@@ -529,14 +545,15 @@ class App(CTk):
             padx=20, pady=10, sticky="nsew"
         )
 
-        self.tabs.add("Basic")
-        self.tabs.add("Automation")
+        self.tabs.add("Recording/Playback")
+        self.tabs.add("Editor")
         self.tabs.add("Unused")
 
         # Build tabs
-        self.build_1_tab(self.tabs.tab("Basic"))
-        self.build_2_tab(self.tabs.tab("Automation"))
+        self.build_basic_tab(self.tabs.tab("Recording/Playback"))
+        self.build_editor_tab(self.tabs.tab("Editor"))
         self.build_3_tab(self.tabs.tab("Unused"))
+        self._create_tooltip_pool()
 
         # Load Last Config, Reapply Hotkeys And Set Reset Values
         self.load_last_config()
@@ -552,7 +569,7 @@ class App(CTk):
         self.refresh_config_dropdown() # Auto Refresh Config
         self.protocol("WM_DELETE_WINDOW", self.on_close)
     # Build Gui
-    def build_1_tab(self, parent):
+    def build_basic_tab(self, parent):
         # Configure scroll bar
         scroll = CTkScrollableFrame(parent, fg_color = "#222244")
         scroll.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
@@ -649,40 +666,68 @@ class App(CTk):
         playback_interval_entry = CTkEntry(playback_and_hotkey, width=120, textvariable=playback_interval_var) # This line initializes the entry
         playback_interval_entry.grid(row=3, column=3, padx=12, pady=8, sticky="w") # This line initializes the position for the entry (most important)
 
-        CTkLabel(playback_and_hotkey, text="Playback speed (minutes)").grid(row=4, column=2, padx=12, pady=8, sticky="w") # This is the label syntax
+        CTkLabel(playback_and_hotkey, text="Playback speed (time)").grid(row=4, column=2, padx=12, pady=8, sticky="w") # This is the label syntax
         playback_speed_var = StringVar(value="1") # This line is the default/placeholder value
         self.vars["playback_speed"] = playback_speed_var # This line makes the entry save and load
         playback_speed_entry = CTkEntry(playback_and_hotkey, width=120, textvariable=playback_speed_var) # This line initializes the entry
         playback_speed_entry.grid(row=4, column=3, padx=12, pady=8, sticky="w") # This line initializes the position for the entry (most important)
+
+        # scan_delay
+        CTkLabel(playback_and_hotkey, text="Capture Thread Scan Delay: ").grid(row=5, column=2, padx=12, pady=8, sticky="w") # This is the label syntax
+        scan_delay_var = StringVar(value="0.01") # This line is the default/placeholder value
+        self.vars["scan_delay"] = scan_delay_var # This line makes the entry save and load
+        scan_delay_entry = CTkEntry(playback_and_hotkey, width=120, textvariable=scan_delay_var) # This line initializes the entry
+        scan_delay_entry.grid(row=5, column=3, padx=12, pady=8, sticky="w") # This line initializes the position for the entry (most important)
     # Second tab
-    def build_2_tab(self, parent):
-        # 4 lines below initialize the scroll wheel and the grid section
-        # scroll = CTkScrollableFrame(parent)
-        # scroll.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        # parent.grid_rowconfigure(0, weight=1)
-        # parent.grid_columnconfigure(0, weight=1)
+    def build_editor_tab(self, parent):
 
-        # Initialize Frame
-        # overlay_options = CTkFrame(scroll, border_width=2)
-        # overlay_options.grid(row=4, column=0, padx=20, pady=20, sticky="nw")
+        # Configure Grid
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
 
-        # Frame Header Label (important)
-        # CTkLabel(overlay_options, text="Overlay Options", font=CTkFont(size=14, weight="bold")).grid(row=0, column=0, padx=12, pady=8, sticky="w")
+        # Main Editor Frame
+        editor_frame = CTkFrame(
+            parent,
+            border_width=2,
+            border_color="#364167",
+            fg_color="#222244"
+        )
 
-        # Initialize Checkbox
-        # fish_overlay_var = StringVar(value="off") # This line and the line below makes the checkbox save and load
-        # self.vars["fish_overlay"] = fish_overlay_var
-        # fish_overlay_cb = CTkCheckBox(overlay_options, text="Fish Overlay", variable=fish_overlay_var, onvalue="on", offvalue="off") # This line initializes checkboxes
-        # fish_overlay_cb.grid(row=1, column=0, padx=12, pady=8, sticky="w") # This line initializes the position for the checkboxes (most important)
+        editor_frame.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=20,
+            pady=20
+        )
 
-        # Normal Label and Entry
-        # CTkLabel(sequence_options, text="Delay before casting").grid( row=3, column=0, padx=12, pady=8, sticky="w") # This is the label syntax
-        # casting_delay2_var = StringVar(value="0.0") # This line is the default/placeholder value
-        # self.vars["casting_delay2"] = casting_delay2_var # This line makes the entry save and load
-        # casting_delay2_entry = CTkEntry(sequence_options, width=120, textvariable=casting_delay2_var) # This line initializes the entry
-        # casting_delay2_entry.grid(row=3, column=1, padx=12, pady=8, sticky="w") # This line initializes the position for the entry (most important)
+        editor_frame.grid_rowconfigure(1, weight=1)
+        editor_frame.grid_columnconfigure(0, weight=1)
 
-        pass # Comments doesn't count in functions
+        # Title
+        CTkLabel(
+            editor_frame,
+            text="AHK Script Editor",
+            font=CTkFont(size=14, weight="bold")
+        ).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 0))
+
+        # Textbox
+        self.editor_textbox = CTkTextbox(
+            editor_frame,
+            wrap="none",
+            font=("Consolas", 14),
+            fg_color="#181836",
+            text_color="#FFFFFF",
+            border_width=0
+        )
+
+        self.editor_textbox.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=10,
+            pady=10
+        )
     # Third tab
     def build_3_tab(self, parent):
         # This tab contains a combobox
@@ -794,6 +839,11 @@ class App(CTk):
                 return
         
         # Save Misc Settings And Set Status
+        try:
+            self.save_editor_to_ahk_file(name)
+        except Exception as e:
+            self.set_status(f"Error saving AHK: {e}")
+            return
         self.save_misc_settings()
         self._apply_hotkeys_from_vars()
         try:
@@ -803,21 +853,6 @@ class App(CTk):
             self.set_status(f"Config saved: {name}")
         except Exception as e:
             self.set_status(f"Error saving config: {e}")
-
-    def _collect_settings_data(self):
-        data = {}
-
-        for key, var in self.vars.items():
-            if key in EXCLUDED_KEYS:
-                continue
-
-            if hasattr(var, "get") and var is not None:
-                try:
-                    data[key] = var.get()
-                except Exception as e:
-                    print(f"Skipping {key}: {e}")
-
-        return data
     def load_settings(self, name="default"):
         """Load settings from a JSON config file."""
         path = os.path.join(CONFIG_DIR, name, "config.json")
@@ -869,10 +904,51 @@ class App(CTk):
                         switch.deselect()
         except Exception as e:
             print(f"Error loading switches: {e}")
+        # Load AHK script — prefer recording.ahk on disk so the editor always
+        # reflects the actual script file (handles external edits and post-record state).
+        try:
+            if hasattr(self, "editor_textbox"):
+                ahk_path = os.path.join(CONFIG_DIR, name.replace(".json", ""), "recording.ahk")
+                script = ""
+                if os.path.exists(ahk_path):
+                    try:
+                        with open(ahk_path, "r", encoding="utf-8") as f:
+                            script = f.read()
+                    except Exception as e:
+                        print(f"Error reading recording.ahk: {e}")
+                        script = data.get("ahk_script", "")
+                else:
+                    # Fallback to whatever was saved in config.json
+                    script = data.get("ahk_script", "")
+
+                self.editor_textbox.delete("1.0", "end")
+                self.editor_textbox.insert("1.0", script)
+
+        except Exception as e:
+            print(f"Error loading script: {e}")
         # Save Misc Settings And Show Status
         self.load_misc_settings()
         self.set_status(f"Config loaded: {name}")
-    
+    def _collect_settings_data(self):
+
+        data = {}
+
+        for key, var in self.vars.items():
+
+            if key in EXCLUDED_KEYS:
+                continue
+
+            if hasattr(var, "get") and var is not None:
+                try:
+                    data[key] = var.get()
+                except Exception as e:
+                    print(f"Skipping {key}: {e}")
+
+        # Save editor script directly into config
+        if hasattr(self, "editor_textbox"):
+            data["ahk_script"] = self.editor_textbox.get("1.0", "end").strip()
+
+        return data
     def load_last_config(self):
         """Load the last used config."""
         last_config_path = os.path.join(BASE_PATH, "last_config.json")
@@ -1154,6 +1230,23 @@ class App(CTk):
 
         except Exception as e:
             self.set_status(f"Error saving AHK: {e}")
+    def save_editor_to_ahk_file(self, name=None):
+        """Write the current editor contents to the active config's recording.ahk."""
+        if not hasattr(self, "editor_textbox"):
+            return None
+
+        config_name = name if name is not None else self.config_var.get()
+        config_folder = os.path.join(CONFIG_DIR, config_name.replace(".json", ""))
+        os.makedirs(config_folder, exist_ok=True)
+
+        ahk_path = os.path.join(config_folder, "recording.ahk")
+        script = self.editor_textbox.get("1.0", "end-1c")
+
+        with open(ahk_path, "w", encoding="utf-8") as f:
+            f.write(script)
+
+        self.recording_file = ahk_path
+        return ahk_path
     def load_recording_file(self):
         """
         Load the recording file from the active config subfolder.
@@ -1209,6 +1302,11 @@ class App(CTk):
         except Exception as e:
             print("Error loading recording (load_recording_file):", e)
             self.recorded_actions = []
+    def _load_recording_file_and_signal(self, done_event):
+        try:
+            self.load_recording_file()
+        finally:
+            done_event.set()
     # Key Press Functions
     def _apply_hotkeys_from_vars(self):
         """Apply hotkey StringVars to the live hotkey attributes used by on_key_press."""
@@ -1255,6 +1353,11 @@ class App(CTk):
             elif pressed_key == self._normalize_hotkey_value(self.hotkey_stop_recording):
                 self.stop_recording()
             elif pressed_key == self._normalize_hotkey_value(self.hotkey_start) and not self.macro_running:
+                    try:
+                        self.save_editor_to_ahk_file()
+                    except Exception as e:
+                        self.set_status(f"Error saving AHK: {e}")
+                        return
                     self.macro_running = True
                     self.after(0, self.withdraw)
                     threading.Thread(target=self.start_playback, daemon=True).start() # This Will Start The Macro In A New Thread, Allowing The Gui To Remain Responsive
@@ -1464,14 +1567,20 @@ class App(CTk):
         # e.g. "} else {"    -> "}", "else", "{"
         normalized = []
         for line in actions:
-            s = line.strip()
+            s = self._strip_inline_comment(line).strip()
             if not s:
                 normalized.append(line)
                 continue
             
             # Skip normalization for Send commands as they use braces for keys
             if s.lower().startswith("send"):
-                normalized.append(line)
+                normalized.append(s)
+                continue
+
+            # Keep function definitions intact so the parser can discard their
+            # bodies without mistaking them for executable function calls.
+            if self._is_function_definition(s):
+                normalized.append(s)
                 continue
 
             # Split leading } if it's not a standalone brace
@@ -1516,6 +1625,16 @@ class App(CTk):
                 continue
 
             lower = raw.lower()
+
+            # ---- Function definition blocks ----
+            # Compatibility functions such as StartCaptureThread() { return }
+            # should not run here, but calls like StartCaptureThread() should.
+            if self._is_function_definition(raw):
+                i += 1
+                if i < end and actions[i].strip() == "{":
+                    i += 1
+                _, i = self._collect_block_body(actions, i, end)
+                continue
 
             # ---- Loop, N  /  Loop (infinite) ----
             if re.match(r"^loop\b", lower):
@@ -1697,8 +1816,7 @@ class App(CTk):
 
         return then_nodes, else_nodes, condition, i
 
-    # --- Executor ------------------------------------------------------ #
-
+    # Executor
     def _exec_block(self, nodes, speed):
         """
         Recursively execute a list of parsed nodes.
@@ -1717,19 +1835,34 @@ class App(CTk):
                 count = node["count"]
                 body  = node["body"]
                 if count is None:
-                    # Infinite loop — only self.macro_running breaks it
+                    # Infinite loop; self.macro_running or AHK break exits it.
                     while self.macro_running:
-                        self._exec_block(body, speed)
+                        try:
+                            self._exec_block(body, speed)
+                        except AhkContinue:
+                            continue
+                        except AhkBreak:
+                            break
                 else:
                     for _ in range(count):
                         if not self.macro_running:
                             return
-                        self._exec_block(body, speed)
+                        try:
+                            self._exec_block(body, speed)
+                        except AhkContinue:
+                            continue
+                        except AhkBreak:
+                            break
 
             elif kind == "while":
                 while self.macro_running and self._evaluate_condition(
                         self._resolve_variables(node["condition"])):
-                    self._exec_block(node["body"], speed)
+                    try:
+                        self._exec_block(node["body"], speed)
+                    except AhkContinue:
+                        continue
+                    except AhkBreak:
+                        break
 
             elif kind == "if":
                 resolved_cond = self._resolve_variables(node["condition"])
@@ -1752,6 +1885,15 @@ class App(CTk):
 
     def _exec_line(self, line, speed):
         """Execute a single resolved action line."""
+        line = self._strip_inline_comment(line).strip()
+        lower = line.lower()
+
+        if lower == "break":
+            raise AhkBreak()
+
+        if lower == "continue":
+            raise AhkContinue()
+
         # Variable assignment  (x := expr)
         if self._handle_assignment(line):
             return
@@ -1766,18 +1908,29 @@ class App(CTk):
         """
         Handles:
         x := 612
+        y := ABC
         """
+
         if ":=" in action:
             var, value = action.split(":=", 1)
+
             var = var.strip()
             value = value.strip()
 
-            # ❌ Block built-in overwrite
+            # Prevent overwriting built-ins
             if var in self.builtin_variables:
-                self.raise_error(action, f"Cannot overwrite built-in variable: {var}")
+                self.raise_error(
+                    action,
+                    f"Cannot overwrite built-in variable: {var}"
+                )
 
+            # Numeric values
+            # Build a merged namespace: builtins first, then user vars (user vars win on conflict)
+            eval_namespace = {**self.builtin_variables, **self.variables}
             try:
-                self.variables[var] = eval(value)
+                self.variables[var] = eval(value, {}, eval_namespace)
+
+            # Raw expression/string
             except:
                 self.variables[var] = value
 
@@ -1862,13 +2015,34 @@ class App(CTk):
         if line.lower() == "return":
             return True
 
-        # Function definitions / calls (currently unsupported)
-        # Matches "Func()" or "Func() {" but excludes flow control like "if (cond)"
-        if re.match(r"^[a-zA-Z_]\w*\(.*\)\s*\{?$", line):
-            if not re.match(r"^(if|while|loop|for)\b", line, re.IGNORECASE):
-                return True
-
         return False
+
+    def _strip_inline_comment(self, line):
+        """
+        Remove AHK inline comments while preserving semicolons inside text.
+        A semicolon starts a comment when it begins a line or follows
+        whitespace, matching the common AHK style used in bundled scripts.
+        """
+        in_single = False
+        in_double = False
+
+        for idx, char in enumerate(line):
+            if char == '"' and not in_single:
+                in_double = not in_double
+            elif char == "'" and not in_double:
+                in_single = not in_single
+            elif char == ";" and not in_single and not in_double:
+                if idx == 0 or line[idx - 1].isspace():
+                    return line[:idx].rstrip()
+
+        return line
+
+    def _is_function_definition(self, line):
+        if not re.match(r"^[A-Za-z_]\w*\s*\([^)]*\)\s*\{?\s*$", line):
+            return False
+        if re.match(r"^(if|while|loop|for)\b", line, re.IGNORECASE):
+            return False
+        return line.rstrip().endswith("{")
     # Grab Screen And Apply Scale Factor
     def _get_scale_factor(self):
         """
@@ -1881,24 +2055,29 @@ class App(CTk):
         if self._scale_cache is not None:
             return self._scale_cache
         if sys.platform == "darwin":
+            # Prefer Tk scaling
             try:
-                try:
-                    main_display  = Quartz.CGMainDisplayID()
-                    pixel_width   = Quartz.CGDisplayPixelsWide(main_display)
-                    bounds        = Quartz.CGDisplayBounds(main_display)
-                    logical_width = bounds.size.width
-                    self._scale_cache = pixel_width / logical_width if logical_width else 1.0
-                except Exception:
-                    self._scale_cache = 1.0
-            except Exception:
-                tk_dpi = self.winfo_fpixels('1i')   # e.g. 144.0 on Retina
-                scale  = tk_dpi / 72.0              # 144/72 = 2.0 on Retina
-                scale  = max(1.0, min(4.0, scale))
+                tk_dpi = self.winfo_fpixels('1i')
+                scale = tk_dpi / 72.0
+                scale = max(1.0, min(scale, 4.0))
                 self._scale_cache = scale
+                return scale
+            except Exception:
+                pass
+            # Fallback to Quartz
+            try:
+                main_display = Quartz.CGMainDisplayID()
+                pixel_width = Quartz.CGDisplayPixelsWide(main_display)
+                bounds = Quartz.CGDisplayBounds(main_display)
+                logical_width = bounds.size.width
+                scale = pixel_width / logical_width if logical_width else 1.0
+                scale = max(1.0, min(scale, 4.0))
+                self._scale_cache = scale
+            except Exception:
+                self._scale_cache = 1.0
         else:
             self._scale_cache = 1.0
         return self._scale_cache
-
     def _invalidate_scale_cache(self):
         """Force _get_scale_factor to re-query on next call (e.g. window moved to another monitor)."""
         self._scale_cache = None
@@ -2337,16 +2516,25 @@ class App(CTk):
             out_x = parts[0]
             out_y = parts[1]
 
-            x1 = int(parts[2])
-            y1 = int(parts[3])
-            x2 = int(parts[4])
-            y2 = int(parts[5])
+            x1 = int(float(parts[2]))
+            y1 = int(float(parts[3]))
+            x2 = int(float(parts[4]))
+            y2 = int(float(parts[5]))
 
             color = parts[6]
 
             # Strip trailing AHK options like "Fast", "RGB"
-            tol_raw = parts[7].split()[0] if len(parts) > 7 else "8"
-            tolerance = int(tol_raw)
+            tolerance = 8
+
+            if len(parts) > 7:
+                try:
+                    tolerance = int(float(parts[7]))
+                except:
+                    tolerance = 8
+
+            mode_flags = [p.lower() for p in parts[8:]]
+            fast_mode = "fast" in mode_flags
+            rgb_mode = "rgb" in mode_flags
 
             # --- Grab frame: use capture thread if running, else one-shot ---
             if self.capture_running and hasattr(self, "_cap_lock"):
@@ -2366,24 +2554,32 @@ class App(CTk):
                 self.variables["ErrorLevel"] = 1
                 return
 
-            # --- Ensure correct color space (BGR → RGB) ---
-            frame = frame[:, :, ::-1]
-
             h, w = frame.shape[:2]
 
-            # --- Clamp region (prevents crashes + macOS scaling issues) ---
-            x1 = max(0, min(x1, w - 1))
-            x2 = max(0, min(x2, w))
-            y1 = max(0, min(y1, h - 1))
-            y2 = max(0, min(y2, h))
+            # --- On macOS (Retina), mss captures at physical pixels but AHK
+            #     coordinates are in logical points. Scale input coords up to
+            #     physical pixels, then scale the found position back down. ---
+            scale = self._get_scale_factor() if sys.platform == "darwin" else 1.0
 
-            if x2 <= x1 or y2 <= y1:
+            px1 = int(x1 * scale)
+            py1 = int(y1 * scale)
+            px2 = int(x2 * scale)
+            py2 = int(y2 * scale)
+            
+            # --- Clamp region to frame bounds ---
+            px1 = max(0, min(px1, w - 1))
+            py1 = max(0, min(py1, h - 1))
+
+            px2 = max(0, min(px2, w))
+            py2 = max(0, min(py2, h))
+
+            if px2 <= px1 or py2 <= py1:
                 self.variables[out_x] = -1
                 self.variables[out_y] = -1
                 self.variables["ErrorLevel"] = 1
                 return
 
-            region = frame[y1:y2, x1:x2]
+            region = frame[py1:py2, px1:px2, :3]
 
             rgb = self._parse_ahk_color(color)
             if rgb is None:
@@ -2392,13 +2588,27 @@ class App(CTk):
                 self.variables["ErrorLevel"] = 1
                 return
 
+            pos = self._find_first_pixel(region, rgb, tolerance)
+
+            if pos is not None:
+                fpx, fpy = pos
+
+                self.variables[out_x] = int((fpx + px1) / scale)
+                self.variables[out_y] = int((fpy + py1) / scale)
+                self.variables["ErrorLevel"] = 0
+            else:
+                self.variables[out_x] = -1
+                self.variables[out_y] = -1
+                self.variables["ErrorLevel"] = 1
+
             # --- Pixel search ---
             pos = self._find_first_pixel(region, rgb, tolerance)
 
-            if pos:
-                px, py = pos
-                self.variables[out_x] = px + x1
-                self.variables[out_y] = py + y1
+            if not pos == None:
+                fpx, fpy = pos
+                # Convert found physical-pixel position back to logical coords
+                self.variables[out_x] = int((fpx + px1) / scale)
+                self.variables[out_y] = int((fpy + py1) / scale)
                 self.variables["ErrorLevel"] = 0
             else:
                 self.variables[out_x] = -1
@@ -2416,8 +2626,8 @@ class App(CTk):
             parts = [p.strip() for p in args.split(",")]
 
             out_var = parts[0]
-            x = int(parts[1])
-            y = int(parts[2])
+            x = int(float(parts[1]))
+            y = int(float(parts[2]))
 
             # --- Grab frame: use capture thread if running, else one-shot ---
             if self.capture_running and hasattr(self, "_cap_lock"):
@@ -2515,14 +2725,87 @@ class App(CTk):
             raise
         except Exception as e:
             self.raise_error(action, str(e))
+    def _create_tooltip_pool(self):
+        """Create the 20 reusable AHK tooltip windows hidden at startup."""
+        bg_color = "#FFFFFF"
+
+        for tooltip_id in range(1, 21):
+            if tooltip_id in self._tooltips:
+                continue
+
+            tooltip = tk.Toplevel(self)
+            tooltip.withdraw()
+            tooltip.overrideredirect(True)
+            tooltip.configure(bg=bg_color)
+            
+            if sys.platform == "darwin":
+                size = 13
+            else:
+                size = 9
+
+            label = tk.Label(
+                tooltip,
+                text="",
+                bg=bg_color,
+                fg="black",
+                bd=0,
+                padx=2,
+                pady=0,
+                font=("Segoe UI", size),
+                anchor="w",
+                justify="left"
+            )
+            label.pack(padx=0, pady=0, ipadx=0, ipady=0)
+
+            if sys.platform == "darwin":
+                try:
+                    tooltip.call(
+                        "tk::unsupported::MacWindowStyle",
+                        "style",
+                        tooltip._w,
+                        "help",
+                        "noActivates doesNotActivateOnClick"
+                    )
+                except:
+                    pass
+
+            self._tooltips[tooltip_id] = {
+                "window": tooltip,
+                "label": label
+            }
+
+    def _show_tooltip(self, tooltip_id, text, x, y):
+        tooltip_data = self._tooltips.get(tooltip_id)
+        if not tooltip_data:
+            return
+
+        tooltip = tooltip_data["window"]
+        label = tooltip_data["label"]
+
+        label.configure(text=text)
+        tooltip.update_idletasks()
+        tooltip.geometry(f"+{x}+{y}")
+        tooltip.deiconify()
+        tooltip.attributes("-topmost", True)
+        tooltip.lift()
+
+    def _hide_tooltip(self, tooltip_id):
+        tooltip_data = self._tooltips.get(tooltip_id)
+        if tooltip_data:
+            tooltip_data["window"].withdraw()
+
     def _cmd_tooltip(self, action, speed):
         """
         Parse AHK syntax
         ToolTip, Text, X, Y, ID
         """
         try:
-            _, args = action.split(",", 1)
-            parts = [self._handle_variable(p.strip()) for p in args.split(",")]
+            if "," in action:
+                _, args = action.split(",", 1)
+                parts = [self._handle_variable(p.strip()) for p in args.split(",")]
+            else:
+                parts = [""]
+
             text = parts[0] if len(parts) > 0 else ""
 
             x = int(float(parts[1])) if len(parts) > 1 and parts[1] else \
@@ -2533,61 +2816,13 @@ class App(CTk):
 
             tooltip_id = int(parts[3]) if len(parts) > 3 and parts[3] else 1
 
-            # -------------------------
-            # Destroy existing tooltip with same ID
-            # -------------------------
+            if not 1 <= tooltip_id <= 20:
+                raise ValueError("ToolTip ID must be between 1 and 20")
 
-            if not hasattr(self, "_tooltips"):
-                self._tooltips = {}
-
-            old_tooltip = self._tooltips.get(tooltip_id)
-
-            if old_tooltip:
-                try:
-                    old_tooltip.destroy()
-                except:
-                    pass
-
-            # -------------------------
-            # Create tooltip window
-            # -------------------------
-
-            tooltip = CTkToplevel()
-
-            tooltip.overrideredirect(True)
-            tooltip.attributes("-topmost", True)
-
-            # Classic AHK pale yellow
-            bg_color = "#FFFFE1"
-
-            tooltip.configure(fg_color=bg_color)
-
-            # -------------------------
-            # Tooltip label
-            # -------------------------
-
-            label = CTkLabel(
-                tooltip,
-                text=text,
-                fg_color=bg_color,
-                text_color="black",
-                corner_radius=0,   # IMPORTANT
-                padx=1,
-                pady=0,
-                font=("Segoe UI", 8)
-            )
-
-            label.pack()
-
-            # Thin border frame look
-            tooltip.configure(border_width=1)
-            tooltip.configure(border_color="#808080")
-
-            # Exact positioning like AHK
-            tooltip.geometry(f"+{x}+{y}")
-
-            # Save tooltip by ID
-            self._tooltips[tooltip_id] = tooltip
+            if text == "":
+                self.after(0, self._hide_tooltip, tooltip_id)
+            else:
+                self.after(0, self._show_tooltip, tooltip_id, text, x, y)
 
         except PlaybackError:
             raise
@@ -2616,8 +2851,21 @@ class App(CTk):
         # Normalize operators
         condition = self._normalize_condition(condition)
 
-        # Replace variables
+        # Replace %VarName% tokens
         condition = self._handle_variable(condition)
+
+        # Replace bare variable names (no % signs) that match known variables/builtins
+        def replace_bare(match):
+            name = match.group(0)
+            if name in self.variables:
+                val = self.variables[name]
+                return str(int(val)) if isinstance(val, float) and val == int(val) else str(val)
+            if name in self.builtin_variables:
+                val = self.builtin_variables[name]
+                return str(int(val)) if isinstance(val, float) and val == int(val) else str(val)
+            return name  # leave unknown words untouched (e.g. "and", "or", "not")
+
+        condition = re.sub(r'\b[A-Za-z_]\w*\b', replace_bare, condition)
 
         try:
             return bool(eval(condition))
@@ -2762,14 +3010,30 @@ class App(CTk):
 
             # print("Saved", len(self.recorded_actions), "actions to", ahk_path)
 
+            # Refresh the editor so the recorded script is immediately visible
+            def _update_editor():
+                try:
+                    with open(ahk_path, "r", encoding="utf-8") as fread:
+                        content = fread.read()
+                    if hasattr(self, "editor_textbox"):
+                        self.editor_textbox.delete("1.0", "end")
+                        self.editor_textbox.insert("1.0", content)
+                except Exception as read_err:
+                    print("Error refreshing editor after recording:", read_err)
+            self.after(0, _update_editor)
+
         except Exception as e:
             print("Error saving AHK:", e)
     def start_playback(self):
         # print("Macro Status: Started Playback")
         self.macro_running = True
         # Load actions from file (handles both .ahk and .txt, skips headers/comments)
-        self.after(0, self.load_recording_file)
-        time.sleep(0.1)  # brief wait for the main-thread call to complete
+        if threading.current_thread() is threading.main_thread():
+            self.load_recording_file()
+        else:
+            load_done = threading.Event()
+            self.after(0, self._load_recording_file_and_signal, load_done)
+            load_done.wait()
 
         # ---- READ SETTINGS ----
         loops_raw = self.vars["playback_loops"].get().strip()
