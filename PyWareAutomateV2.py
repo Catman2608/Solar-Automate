@@ -140,226 +140,6 @@ ensure_last_config_exists()
 os.makedirs(CONFIG_DIR, exist_ok=True)
 os.makedirs(IMAGES_PATH, exist_ok=True)
 
-# Terms Of Service Dialogue
-class TermsOfServiceDialog(CTkToplevel):
-    def __init__(self, parent=None, show_setup=True):
-        super().__init__(parent)
-        
-        # Screen Size (Cache Once – Thread Safe)
-        self.SCREEN_WIDTH = self.winfo_screenwidth()
-        self.SCREEN_HEIGHT = self.winfo_screenheight()
-        self.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        # Window
-        self.configure(fg_color="#181836")   # <- Main Window Ultra Dark
-        self.geometry("750x600")
-        self.title("PyWare Automate V2 - Terms of Service")
-        self.minsize(650, 500)
-        
-        # Center Window
-        self.update_idletasks()
-        x = (self.winfo_screenwidth() // 2) - (750 // 2)
-        y = (self.winfo_screenheight() // 2) - (600 // 2)
-        self.geometry(f"+{x}+{y}")
-
-        # Status Bar
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=0)  # Header Stays Fixed
-        self.grid_rowconfigure(1, weight=1)  # Content Expands
-        self.grid_rowconfigure(2, weight=0)  # Nav Bar Fixed
-        
-        # Top Bar Frame (Status + Buttons)
-        top_bar = CTkFrame(self, fg_color="transparent")
-        top_bar.grid(row=0, column=0, padx=20, pady=10, sticky="ew")
-
-        top_bar.grid_columnconfigure(0, weight=1)
-
-        # Logo Label
-        logo_label = CTkLabel(
-            top_bar, 
-            text="TERMS OF SERVICE",
-            font=CTkFont(size=16, weight="bold")
-        )
-        logo_label.grid(row=0, column=0, sticky="w")
-
-        # Main Content Container
-        self.container = CTkFrame(self, border_color = "#364167", fg_color = "#222244") # 181836
-        self.container.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
-
-        self.container.grid_rowconfigure(0, weight=1)
-        self.container.grid_columnconfigure(0, weight=1)
-
-        # Pages
-        self.page_tos = CTkFrame(self.container, border_color = "#364167", fg_color = "#222244")
-
-        # Agree Labels
-        self.agree_var = BooleanVar(value=False)
-        self.accepted = False
-
-        # Build Pages
-        self.build_tos_page(self.page_tos)
-        self.page_tos.grid(row=0, column=0, sticky="nsew")
-
-        # Navigation Bar
-        nav_bar = CTkFrame(self, border_color="#364167", fg_color="#181836")
-        nav_bar.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
-
-        nav_bar.grid_columnconfigure((0, 1), weight=1)
-
-        # Decline Button
-        self.back_btn = CTkButton(
-            nav_bar,
-            text="Decline",
-            command=self.on_close
-        )
-
-        # Accept Button
-        self.next_btn = CTkButton(
-            nav_bar,
-            text="Accept",
-            command=self.accept_terms,
-            state="disabled"
-        )
-
-        self.back_btn.grid(row=0, column=0, padx=5, sticky="w")
-        self.next_btn.grid(row=0, column=1, padx=5, sticky="e")
-    # Basic Settings Tab
-    def build_tos_page(self, parent):
-        parent.grid_rowconfigure(0, weight=1)
-        parent.grid_rowconfigure(1, weight=0)
-        parent.grid_columnconfigure(0, weight=1)
-
-        textbox = CTkTextbox(
-            parent,
-            wrap="word",
-            border_color="#364167",
-            fg_color="#222244",
-            text_color="#E8EAF6",
-            scrollbar_button_color="#364167",
-            scrollbar_button_hover_color="#4B5A8A"
-        )
-        textbox.grid(row=0, column=0, padx=12, pady=10, sticky="nsew")
-
-        textbox.insert("1.0", """
-PyWare Automate V2.0 - Terms of Use
-
-By using this software, you agree to the following:
-
-
-⚡ 1. USAGE & MODIFICATION
-
-Allowed:
-Use these macros for personal purposes.
-Study and reverse engineer the code for educational purposes.
-Modify the code for your own personal use.
-Share your modifications with proper attribution.
-                            
-Forbidden:
-Repackage or redistribute this software as your own.
-Remove or modify credits to the author (Catman2608).
-Sell or monetize this software or its derivatives.
-Claim ownership of the original codebase.
-                            
-⚡ IF YOU SHARE MODIFICATIONS:
-⚠️ You MUST credit Catman2608 as the original author.
-⚠️ You MUST link to the original source (YouTube/Website).
-⚠️ You MUST clearly indicate what changes you made.
-                            
-⚡ 2. INTENDED USE & GAME COMPLIANCE
-
-This software suite is designed for use on multiple platforms.
-You are responsible for ensuring your use complies with the platform's Terms of Service and specific game rules.
-The developers and the website owner (Catman2608) are NOT responsible for any account actions (bans, suspensions) resulting from your use of this software.
-Use at your own risk. (usage in Roblox games are allowed)
-
-⚡ 3. LIABILITY DISCLAIMER
-
-The owner and authors are NOT liable for any damages, data loss, or account issues.
-There is no guarantee of functionality, compatibility, or performance.
-Software is provided "as-is." Use is entirely at your own risk.
-                            
-⚡ 4. PRIVACY & DATA
-
-Macros store configuration data (settings) locally on your device.
-No personal data is collected or transmitted to external servers.
-Your preferences are stored in a local .json file only.
-                            
-⚡ 5. CREDITS & ATTRIBUTION
-                            
-Original Author: Catman2608
-YouTube: https://www.youtube.com/@HexaTitanGaming
-Discord: https://discord.gg/aMZY8yrF8r
-If you share, modify, or redistribute this software:
-                            
-📋 REQUIRED: Credit "Catman2608" as the original creator
-📋 REQUIRED: Link to the original source
-📋 REQUIRED: Indicate any changes you made
-🚫 FORBIDDEN: Claim the entire work as your own
-                            
-⚡ 6. TERMS UPDATES
-
-These terms may be updated at any time.
-Continued use of the software from the PyWare Automate website constitutes acceptance of the updated terms.
-                            
-⚡ 7. ACCEPTANCE
-
-By accepting the terms, you acknowledge that you have read, understood, and agree to these Terms of Use.
-If you do not agree, please remove the software from your device.
-
-🚀 Thank you for using PyWare Automate! 🚀
-        """)
-        textbox.configure(state="disabled")
-
-        checkbox = CTkCheckBox(
-            parent,
-            text="I agree to the Terms of Service",
-            text_color="#E8EAF6",
-            fg_color="#4B7BEC",
-            hover_color="#3867D6",
-            border_color="#AAB2D5",
-            variable=self.agree_var,
-            command=self.update_next_button
-        )
-        checkbox.grid(row=1, column=0, padx=12, pady=(0, 10), sticky="w")
-    # Second Tab
-    def build_setup_page(self, parent):
-        parent.grid_rowconfigure(0, weight=1)
-        parent.grid_columnconfigure(0, weight=1)
-
-        # ── Info text ────────────────────────────────────────────────────
-        textbox = CTkTextbox(parent, wrap="word", border_color="#364167",
-                             fg_color="#222244", height=220)
-        textbox.grid(row=0, column=0, padx=12, pady=(10, 6), sticky="nsew")
-
-        textbox.insert("1.0", """Setup Guide
-
-Would you like to automatically download and install the Config Pack and Image Pack?
-
-• YES  – The app will download configs.zip and images.zip from Google Drive
-         and place them in the correct folders for you automatically.
-
-• NO   – Skip the download. You can install packs manually later:
-         Step 1: Download configs.zip and images.zip from the Drive link below.
-         Step 2: Click "Open Base Folder" to locate your install directory.
-         Step 3: Extract configs.zip into the  configs/  folder.
-         Step 4: Extract images.zip  into the  images/  folder.
-         Step 5: Set up your Bar Areas in the main app.
-
-Drive link: https://drive.google.com/drive/folders/1pDSSKYRmMHQcv2SSrMxfzcGz4mgY-esS
-        """)
-        textbox.configure(state="disabled")
-    def update_next_button(self):
-        self.next_btn.configure(
-            state="normal" if self.agree_var.get() else "disabled"
-        )
-    def accept_terms(self):
-        self.accepted = True
-        # Close TOS window
-        self.destroy()
-    def on_close(self):
-        if not self.accepted:
-            self.accepted = False
-        self.destroy()
 # Main App
 class App(CTk):
     def __init__(self):
@@ -427,6 +207,7 @@ class App(CTk):
             "stopcapturethread": self._cmd_stopcapturethread,
             "msgbox": self._cmd_msgbox,
             "tooltip": self._cmd_tooltip,
+            "outputdebug": self._cmd_outputdebug,
             # "if" and "else" are handled structurally by execute_script/
             # _parse_if_node — they never reach the dispatch map.
         }
@@ -434,26 +215,6 @@ class App(CTk):
         # Invalidate Scale Cache If The Window Moves To A Different Monitor
         if sys.platform == "darwin":
             self.bind("<Configure>", lambda e: self._invalidate_scale_cache())
-        
-        # Show Tos Dialogue
-        state, first_launch, new_version = self.load_app_state()
-
-        # Important: Show Tos If Needed
-        if first_launch or not state.get("tos_accepted", False):
-            dialog = TermsOfServiceDialog(self)
-            self.wait_window(dialog)
-
-            if not dialog.accepted:
-                self.destroy()
-                return
-
-            # Mark Accepted
-            state["tos_accepted"] = True
-
-        # Update Version After TOS
-        state["version"] = APP_VERSION
-
-        self.save_app_state(state)
 
         # Start Hotkey Listener
         self.key_listener = KeyListener(on_press=self.on_key_press)
@@ -547,12 +308,12 @@ class App(CTk):
 
         self.tabs.add("Recording/Playback")
         self.tabs.add("Editor")
-        self.tabs.add("Unused")
+        # self.tabs.add("Unused")
 
         # Build tabs
         self.build_basic_tab(self.tabs.tab("Recording/Playback"))
         self.build_editor_tab(self.tabs.tab("Editor"))
-        self.build_3_tab(self.tabs.tab("Unused"))
+        # self.build_3_tab(self.tabs.tab("Unused"))
         self._create_tooltip_pool()
 
         # Load Last Config, Reapply Hotkeys And Set Reset Values
@@ -618,10 +379,10 @@ class App(CTk):
         playback_and_hotkey.grid(row=1, column=0, padx=20, pady=20, sticky="nw")
         CTkLabel(playback_and_hotkey, text="Hotkey Settings", font=CTkFont(size=14, weight="bold")).grid(row=0, column=0, padx=12, pady=8, sticky="w")
         # Key binds
-        CTkLabel(playback_and_hotkey, text="Start Key").grid(row=1, column=0, padx=12, pady=6, sticky="w" )
-        CTkLabel(playback_and_hotkey, text="Change Bar Areas Key").grid(row=2, column=0, padx=12, pady=6, sticky="w" )
-        CTkLabel(playback_and_hotkey, text="Stop Key").grid(row=3, column=0, padx=12, pady=6, sticky="w" )
-        CTkLabel(playback_and_hotkey, text="Screenshot Key").grid(row=4, column=0, padx=12, pady=6, sticky="w" )
+        CTkLabel(playback_and_hotkey, text="Start Playback Key").grid(row=1, column=0, padx=12, pady=6, sticky="w" )
+        CTkLabel(playback_and_hotkey, text="Start Recording Key").grid(row=2, column=0, padx=12, pady=6, sticky="w" )
+        CTkLabel(playback_and_hotkey, text="Stop Playback Key").grid(row=3, column=0, padx=12, pady=6, sticky="w" )
+        CTkLabel(playback_and_hotkey, text="Stop Recording Key").grid(row=4, column=0, padx=12, pady=6, sticky="w" )
         # Disable hotkeys
         enable_hotkeys_var = StringVar(value="off")
         self.vars["enable_hotkeys"] = enable_hotkeys_var
@@ -2725,6 +2486,19 @@ class App(CTk):
             raise
         except Exception as e:
             self.raise_error(action, str(e))
+    def _cmd_outputdebug(self, action, speed):
+        # Split once after command
+        _, args = action.split(",", 1)
+
+        # Split parameters
+        parts = [p.strip() for p in args.split(",")]
+
+        # Apply variable substitution BEFORE using values
+        parts = [self._handle_variable(p) for p in parts]
+        parts2 = str(parts)
+        parts2 = parts2.replace("['", "")
+        parts2 = parts2.replace("']", "")
+        print(parts2)
     def _create_tooltip_pool(self):
         """Create the 20 reusable AHK tooltip windows hidden at startup."""
         bg_color = "#FFFFFF"
