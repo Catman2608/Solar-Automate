@@ -16,6 +16,7 @@ WhiteBarColorTolerance := 8
 ; Auto Calculations
 WhiteBarSize := (Control + 0.3) * 777
 FishBarTooltipHeight := FishBarBottom + 20
+OutputDebug, test
 ; ==========
 F5:: ; Start macro
     SetBatchLines, -1

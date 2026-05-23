@@ -5,13 +5,8 @@ F5:: ; Start macro
     SetMouseDelay, -1
     SetTitleMatchMode, 2
     SendMode, Input
-    FishBarLeft := A_ScreenWidth/3.52
-    FishBarRight := A_ScreenWidth/1.4317
-    FishBarTop := A_ScreenHeight/1.203
-    FishBarBottom := A_ScreenHeight/1.1512
-    PixelGetColor, Found, 719, 759
-    PixelSearch, FoundX, FoundY, %FishBarLeft%, %FishBarTop%, %FishBarRight%, %FishBarBottom%, %Found%, 5, Fast
-    MsgBox, 1, %FoundX% %FoundY%
+    MouseGetPos, FoundX, FoundY
+    ToolTip, %FoundX% %FoundY%, 300, 300, 1
     ; ---- End of Macro ----
 return
 
