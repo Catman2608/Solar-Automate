@@ -5,8 +5,9 @@ F5:: ; Start macro
     SetMouseDelay, -1
     SetTitleMatchMode, 2
     SendMode, Input
-    MouseGetPos, FoundX, FoundY
-    ToolTip, %FoundX% %FoundY%, 300, 300, 1
+    ; ---- Start of Macro ----
+    Sleep, 2192
+    Send, {F8 down}
     ; ---- End of Macro ----
 return
 
