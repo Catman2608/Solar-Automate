@@ -24,8 +24,9 @@ import webbrowser
 import re
 import numpy as np
 import mss
-import Quartz
 import sys
+if sys.platform == "darwin":
+    import Quartz
 # Initialize controllers
 keyboard_controller = KeyboardController()
 mouse_controller = MouseController()

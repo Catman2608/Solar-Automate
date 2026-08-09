@@ -1,2 +1,0 @@
-The Xternal config is originally made by misery (Discord)
-Catman2608 is porting this config to macOS

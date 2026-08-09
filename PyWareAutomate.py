@@ -640,6 +640,28 @@ class App(CTk):
                 self.playback_action(line, speed)
             i += 1
     # Playback functions
+    def _evaluate_loop_count(self, line):
+        """
+        Evaluates:
+            Loop, 5
+            Loop, %Amount%
+            Loop
+        """
+        try:
+            parts = line.split(",", 1)
+            # Infinite/default loop style
+            if len(parts) < 2:
+                return 1
+            count_part = parts[1].replace("{", "").strip()
+            # Variable dereference
+            if count_part.startswith("%") and count_part.endswith("%"):
+                var_name = count_part[1:-1]
+                value = self.variables.get(var_name, 1)
+                return int(value)
+            return int(count_part.split()[0])
+        except Exception as e:
+            print(f"[LOOP ERROR] {line} → {e}")
+            return 1
     def _extract_block(self, actions, start_index):
         """
         Extracts a { ... } block starting after a Loop/If/etc statement.
@@ -677,28 +699,6 @@ class App(CTk):
                 block.append(current)
             i += 1
         return block, i - 1
-    def _evaluate_loop_count(self, line):
-        """
-        Evaluates:
-            Loop, 5
-            Loop, %Amount%
-            Loop
-        """
-        try:
-            parts = line.split(",", 1)
-            # Infinite/default loop style
-            if len(parts) < 2:
-                return 1
-            count_part = parts[1].replace("{", "").strip()
-            # Variable dereference
-            if count_part.startswith("%") and count_part.endswith("%"):
-                var_name = count_part[1:-1]
-                value = self.variables.get(var_name, 1)
-                return int(value)
-            return int(count_part.split()[0])
-        except Exception as e:
-            print(f"[LOOP ERROR] {line} → {e}")
-            return 1
     def _clean_ahk_braces(self, key_raw):
         # Remove braces like {Enter}, {Down}, {Space}
         key_raw = key_raw.strip()
