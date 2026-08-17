@@ -1,5 +1,6 @@
 def remove_blank_lines(input_file, output_file):
-    with open(input_file, 'r') as infile:
+    # Read with error handling - replaces problematic characters with '?'
+    with open(input_file, 'r', encoding='utf-8', errors='replace') as infile:
         lines = infile.readlines()
     
     non_blank_lines = []
@@ -7,13 +8,16 @@ def remove_blank_lines(input_file, output_file):
         stripped = line.strip()
         # Check if line is empty OR contains only spaces and a # (empty comment)
         if stripped == '' or stripped == '#':
-            skip_condition = last_stripped.startswith("return") or last_stripped.startswith("continue") or last_stripped.startswith("break") or last_stripped.startswith("pass") or last_stripped.startswith("raise")
+            if input_py.endswith("py"):
+                skip_condition = last_stripped.startswith("return") or last_stripped.startswith("continue") or last_stripped.startswith("break") or last_stripped.startswith("pass") or last_stripped.startswith("raise")
+            else:
+                skip_condition = last_stripped.endswith("}")
             if skip_condition == False:
                 continue  # Skip this line
         last_stripped = stripped
         non_blank_lines.append(line)
     
-    with open(output_file, 'w') as outfile:
+    with open(output_file, 'w', encoding='utf-8') as outfile:
         outfile.writelines(non_blank_lines)
 
 # Usage

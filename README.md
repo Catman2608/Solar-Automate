@@ -4,11 +4,11 @@ This project is licensed under the GNU GPL v3.
 
 You are free to study, modify, and redistribute this software. If you distribute a project containing code from this repository, the resulting project must also be released under the GPL v3, with its source code made available.
 
-# PyWare Automate V3
+# Solar Automate V3
 
 Pre-built versions are available for supported platforms on the official releases page:
 
-[Official Downloads / Releases](https://sites.google.com/view/icf-automation-network/downloads?authuser=0)
+[Official Downloads / Releases](https://catman2608.github.io/PyWare-Backend/)
 
 If a pre-built version is not available for your system, follow the source installation guide below.
 
@@ -17,6 +17,7 @@ If a pre-built version is not available for your system, follow the source insta
 ## 📋 Overview
 
 This guide walks through setting up Python and all required modules for running the project. The application uses GUI automation, OCR, screen capture, and cross-platform OS features.
+If the ZIP file is flagged as a virus and doesn't let you download, download only the SolarAutomateV3.py, the icon.ico and the icon.icns file.
 
 ---
 

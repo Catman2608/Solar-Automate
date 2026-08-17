@@ -40,7 +40,7 @@ except:
     open_mode = "Editor"
     folder_path = os.getcwd()
 open_mode = "Playback"
-file_path = "PyWare Fishing V4 Lite.ahk"
+file_path = "Solar Fishing V4 Lite.ahk"
 playback_path = os.path.join(folder_path, file_path)
 def open_link(url):
     webbrowser.open(url)
@@ -822,7 +822,7 @@ class Playback(tk.Tk):
     def raise_error(self, action, msg=""):
         try:
             messagebox.showerror(
-                "PyWare Error",
+                "Solar Error",
                 f"Error processing:\n{action}\n\n{msg}\n\nThe program will exit"
             )
         except Exception:

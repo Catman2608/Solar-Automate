@@ -41,7 +41,7 @@ if len(sys.argv) > 1:
 else:
     open_mode = "Editor"
     folder_path = os.getcwd()
-    file_path = "PyWare Fishing V4 Lite.ahk"
+    file_path = "Solar Fishing V4 Lite.ahk"
     playback_path = os.path.join(folder_path, file_path)
 
 def open_link(url):
