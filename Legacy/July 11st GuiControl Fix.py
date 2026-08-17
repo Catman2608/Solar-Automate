@@ -41,7 +41,7 @@ except:
     open_mode = "Editor"
     folder_path = os.getcwd()
 open_mode = "Playback"
-file_path = "PyWare Fishing V4 Lite.ahk"
+file_path = "Solar Fishing V4 Lite.ahk"
 playback_path = os.path.join(folder_path, file_path)
 def open_link(url):
     webbrowser.open(url)
@@ -599,7 +599,7 @@ class Playback(tk.Tk):
                 self.builtin_variables["A_LoopFileAttrib"] = "A"
         except Exception as e:
             # Non-fatal: continue execution even if stat fails for one file
-            print(f"[PyWareAutomate] Warning setting A_LoopFile* for {filepath}: {e}")
+            print(f"[SolarAutomate] Warning setting A_LoopFile* for {filepath}: {e}")
     def scan_functions(self, actions):
         self.functions.clear()
         self.labels.clear()

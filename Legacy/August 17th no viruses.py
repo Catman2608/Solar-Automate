@@ -11,13 +11,14 @@ import traceback
 import math
 import threading
 import time
+import subprocess
 import mss
 # Keyboard and Mouse clicks (platform-specific)
-from pynput.keyboard import Listener as KeyListener, Key
-from pynput import keyboard, mouse
-from pynput.keyboard import Controller as KeyboardController
-from pynput.mouse import Controller as MouseController
-from pynput.mouse import Button
+import pyautogui
+pyautogui.PAUSE = 0.0
+pyautogui.MINIMUM_DURATION = 0.0
+pyautogui.MINIMUM_SLEEP = 0.0
+pyautogui.FAILSAFE = False
 # File management
 import numpy as np
 if sys.platform == "win32":
@@ -25,14 +26,13 @@ if sys.platform == "win32":
     from ctypes import wintypes
 elif sys.platform == "darwin":
     import Quartz
+    import AppKit
     from AppKit import NSScreen
 elif sys.platform == "linux":
     from Xlib import X, XK, display as Xdisplay
     from Xlib.ext import xtest
 # Define platform-specific constants
 # All platforms
-keyboard_controller = KeyboardController()
-mouse_controller = MouseController()
 APP_VERSION = "3.0"
 BETA_VERSION = 0
 try:
@@ -42,26 +42,221 @@ except:
     open_mode = "Editor"
     folder_path = os.getcwd()
 open_mode = "Playback"
-file_path = "PyWare Fishing V4 Lite.ahk"
+file_path = "Solar Fishing Lite.ahk"
 playback_path = os.path.join(folder_path, file_path)
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
+# Windows (Transparency and Ctypes WinDLL)
 if sys.platform == "win32":
+    windll = ctypes.windll.user32
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_RIGHTDOWN = 0x0008
+    MOUSEEVENTF_RIGHTUP = 0x0010
+    # Ctypes GUI constants
+    SW_MAXIMIZE = 3
+    user32 = ctypes.windll.user32
+    user32.GetWindowLongW.restype = wintypes.LONG
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.SetWindowLongW.restype = wintypes.LONG
+    user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LONG]
+    user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
+    user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF, ctypes.c_byte, wintypes.DWORD]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.ShowWindow.argtypes = [
+        wintypes.HWND,
+        ctypes.c_int
+    ]
+    # Set DPI awareness early to ensure consistent coordinate handling
+    try:
+        windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_PER_MONITOR_DPI_AWARE
+        # DPI awareness successfully set
+    except:
+        try:
+            windll.user32.SetProcessDPIAware()  # Fallback for older Windows
+            # DPI awareness set (fallback method)
+        except:
+            pass  # DPI awareness could not be set - coordinates may be inconsistent
+
+    # Windows API related functions
     def get_scale_factor():
         return 1
+
+    def send_key(key, delay=0.05, click_type=0):
+        """
+        Send a keyboard event using the Windows SendInput API.
+        click_type:
+            0 = click (press + release)   [default]
+            1 = hold (press only)
+            2 = release (release only)
+        """
+        import ctypes
+        import time
+        user32 = ctypes.windll.user32
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_KEYUP = 0x0002
+        KEY_MAP = { "backspace": 0x08, "tab": 0x09, "enter": 0x0D, "return": 0x0D, "shift": 0x10, "ctrl": 0x11, "control": 0x11, "alt": 0x12, "pause": 0x13, 
+                   "capslock": 0x14, "escape": 0x1B, "esc": 0x1B, "space": 0x20, "pageup": 0x21, "pgup": 0x21, "pagedown": 0x22, "pgdn": 0x22, "end": 0x23, 
+                   "home": 0x24, "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28, "insert": 0x2D, "delete": 0x2E, "win": 0x5B, "lwin": 0x5B, "rwin": 0x5C, 
+                   "apps": 0x5D, "numlock": 0x90, "scrolllock": 0x91, "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74, "f6": 0x75, "f7": 0x76, 
+                   "f8": 0x77, "f9": 0x78, "f10": 0x79, "f11": 0x7A, "f12": 0x7B, "f13": 0x7C, "f14": 0x7D, "f15": 0x7E, "f16": 0x7F, "f17": 0x80, "f18": 0x81, 
+                   "f19": 0x82, "f20": 0x83, "f21": 0x84, "f22": 0x85, "f23": 0x86, "f24": 0x87,}
+        key_string = str(key).lower()
+        # Resolve the virtual-key code.
+        if key_string in KEY_MAP:
+            vk = KEY_MAP[key_string]
+        elif len(key_string) == 1:
+            vk = user32.VkKeyScanW(ord(key_string))
+            if vk == -1:
+                return
+
+            vk &= 0xFF
+        else:
+            return
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", ctypes.c_ushort),
+                ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+            ]
+        class INPUT(ctypes.Structure):
+            _fields_ = [
+                ("type", ctypes.c_ulong),
+                ("ki", KEYBDINPUT),
+            ]
+        extra = ctypes.c_ulong(0)
+        def key_event(is_key_up):
+            flags = KEYEVENTF_KEYUP if is_key_up else 0
+            inp = INPUT(
+                type=INPUT_KEYBOARD,
+                ki=KEYBDINPUT(
+                    wVk=vk,
+                    wScan=0,
+                    dwFlags=flags,
+                    time=0,
+                    dwExtraInfo=ctypes.pointer(extra),
+                ),
+            )
+            user32.SendInput(
+                1,
+                ctypes.byref(inp),
+                ctypes.sizeof(INPUT)
+            )
+        if click_type == 0:
+            key_event(False)
+            time.sleep(delay)
+            key_event(True)
+        elif click_type == 1:
+            key_event(False)
+        elif click_type == 2:
+            key_event(True)
+        else:
+            key_event(False)
+            time.sleep(delay)
+            key_event(True)
+    def _get_hwnd(window):
+        """Return a Windows HWND int from a pywebview window/native object."""
+        native = getattr(window, "native", window)
+        candidates = (
+            native,
+            getattr(native, "Handle", None),# WinForms BrowserForm -> System.IntPtr
+            getattr(window, "Handle", None),
+            getattr(window, "hwnd", None),
+        )
+        for candidate in candidates:
+            if not candidate:
+                continue
+
+            if isinstance(candidate, int):
+                return candidate
+
+            if hasattr(candidate, "value") and candidate.value:
+                return int(candidate.value)
+
+            if hasattr(candidate, "ToInt64"):
+                value = int(candidate.ToInt64())
+                if value:
+                    return value
+
+            if hasattr(candidate, "ToInt32"):
+                value = int(candidate.ToInt32())
+                if value:
+                    return value
+
+            try:
+                value = int(candidate)
+            except (TypeError, ValueError):
+                continue
+
+            if value:
+                return value
+
+        return None
+
+# macOS (Keyboard, scale factor, mouse button)
 elif sys.platform == "darwin":
     _scale_cache = None
+    MAC_KEY_MAP = {
+        "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
+        "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20,
+        "4": 21, "6": 22, "5": 23, "equal": 24, "9": 25, "7": 26, "minus": 27, "8": 28, "0": 29, "o": 31,
+        "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "semicolon": 41, "comma": 43, "slash": 44, "n": 45,
+        "m": 46, "period": 47, "space": 49, "return": 36, "enter": 76, "tab": 48, "escape": 53,
+    }
     def get_scale_factor():
         global _scale_cache
         if _scale_cache is not None:
             return _scale_cache
 
         try:
-            _scale_cache = float(NSScreen.mainScreen().backingScaleFactor())
+            _scale_cache = float(AppKit.NSScreen.mainScreen().backingScaleFactor())
         except Exception:
             _scale_cache = 1.0
         return _scale_cache
+
+    def get_mouse_position():
+        event = Quartz.CGEventCreate(None)
+        loc = Quartz.CGEventGetLocation(event)
+        return loc.x, loc.y
+
+    def _move_mouse(x, y):
+        """Expects logical points."""
+        point = Quartz.CGPointMake(x, y)
+        Quartz.CGWarpMouseCursorPosition(point)
+        Quartz.CGAssociateMouseAndMouseCursorPosition(True)
+    def _mouse_event(button="left", press=True, x=None, y=None):
+        """Unified cross-platform mouse event.
+        button: 'left'/'right'/'middle' or 1/2/3
+        press=True → down, False → up
+        """
+        if x is None or y is None:
+            x, y = get_mouse_position()
+        # Map button → (Quartz button constant, down event, up event)
+        button_map = {
+            "left":   (Quartz.kCGMouseButtonLeft, Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp),
+            1:        (Quartz.kCGMouseButtonLeft, Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp),
+            "right":  (Quartz.kCGMouseButtonRight,Quartz.kCGEventRightMouseDown,Quartz.kCGEventRightMouseUp),
+            3:        (Quartz.kCGMouseButtonRight,Quartz.kCGEventRightMouseDown,Quartz.kCGEventRightMouseUp),
+            "middle": (Quartz.kCGMouseButtonCenter, Quartz.kCGEventOtherMouseDown,Quartz.kCGEventOtherMouseUp),
+            2:        (Quartz.kCGMouseButtonCenter, Quartz.kCGEventOtherMouseDown,Quartz.kCGEventOtherMouseUp),
+        }
+        key = button.lower() if isinstance(button, str) else button
+        if key not in button_map:
+            key = "left"
+        btn, down_evt, up_evt = button_map[key]
+        event_type = down_evt if press else up_evt
+        event = Quartz.CGEventCreateMouseEvent(
+            None,
+            event_type,
+            Quartz.CGPointMake(float(x), float(y)),
+            btn
+        )
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
     def send_key(key, delay=0.05, click_type=0):
         """
         Send a keyboard event.
@@ -105,6 +300,84 @@ elif sys.platform == "darwin":
                 Quartz.kCGHIDEventTap,
                 Quartz.CGEventCreateKeyboardEvent(None, keycode, False)
             )
+# Linux (Mouse positions and Xdisplay)
+elif sys.platform.startswith("linux"):
+    _xdisplay = None
+    def _get_xdisplay():
+        global _xdisplay
+        if _xdisplay is None:
+            _xdisplay = Xdisplay.Display()
+        return _xdisplay
+
+    def get_scale_factor():
+        """
+        X11 normally works in physical pixels.
+        Return 1.0 unless you implement desktop-specific scaling detection.
+        """
+        return 1.0
+
+    def get_mouse_position():
+        d = _get_xdisplay()
+        root = d.screen().root
+        pointer = root.query_pointer()
+        return pointer.root_x, pointer.root_y
+
+    def _move_mouse(x, y):
+        d = _get_xdisplay()
+        root = d.screen().root
+        root.warp_pointer(int(x), int(y))
+        d.sync()
+    def _mouse_event(button="left", press=True, x=None, y=None):
+        """Unified cross-platform mouse event.
+        button: 'left'/'right'/'middle' or 1/2/3
+        press=True → down, False → up
+        """
+        d = _get_xdisplay()
+        if x is not None and y is not None:
+            _move_mouse(x, y)   # move first so the click happens at the desired location
+        button_map = {
+            "left": 1, 1: 1,
+            "middle": 2, 2: 2,
+            "right": 3, 3: 3,
+        }
+        key = button.lower() if isinstance(button, str) else button
+        btn = button_map.get(key, 1)
+        xtest.fake_input(
+            d,
+            X.ButtonPress if press else X.ButtonRelease,
+            btn
+        )
+        d.sync()
+    def send_key(key, delay=0.05, click_type=0):
+        d = _get_xdisplay()
+        keysym = XK.string_to_keysym(str(key))
+        if keysym == 0:
+            keysym = XK.string_to_keysym(str(key).lower())
+        if keysym == 0:
+            return
+
+        keycode = d.keysym_to_keycode(keysym)
+        if keycode == 0:
+            return
+
+        if click_type == 0:
+            xtest.fake_input(d, X.KeyPress, keycode)
+            d.sync()
+            time.sleep(delay)
+            xtest.fake_input(d, X.KeyRelease, keycode)
+            d.sync()
+        elif click_type == 1:
+            xtest.fake_input(d, X.KeyPress, keycode)
+            d.sync()
+        elif click_type == 2:
+            xtest.fake_input(d, X.KeyRelease, keycode)
+            d.sync()
+        else:
+            xtest.fake_input(d, X.KeyPress, keycode)
+            d.sync()
+            time.sleep(delay)
+            xtest.fake_input(d, X.KeyRelease, keycode)
+            d.sync()
 # Screen dimensions via mss — use monitor[1] (primary) not monitor[0] (virtual combined).
 # On Windows with DPI scaling, pywebview's x/y/width/height use physical pixels,
 # so we must query the raw physical resolution, not the scaled logical resolution.
@@ -157,6 +430,7 @@ def cgimage_to_srgb_numpy(image):
 
     else:
         return image
+
 # Main GUI
 class MainGUI(tk.Tk):
     def __init__(self):
@@ -280,17 +554,16 @@ class Playback(tk.Tk):
         self.current_line_count = 0
         self.font_size = 9
         self.scan_delay = 1
+        self.send_backend = "Event"
+        self.key_delay = 100
         self.last_scan_request = time.monotonic()
-        # Start unified key listener (handles both recording capture and hotkey dispatch)
-        self.key_listener = KeyListener(on_press=self.on_key_press, on_release=self.on_key_release)
-        self.key_listener.daemon = True
-        self.key_listener.start()
         try:
             style = ttk.Style()
             style.theme_use("clam")
             style.configure("TNotebook.Tab", padding=(2, 1, 2, 1))
         except:
             pass
+
         self.geometry("300x300")
         title = os.path.basename(playback_path)
         self.current_tab = None
@@ -315,11 +588,13 @@ class Playback(tk.Tk):
                 self.key_listener.stop()
             except Exception:
                 pass
+
         if hasattr(self, "hotkey_listener") and self.hotkey_listener is not None:
             try:
                 self.hotkey_listener.stop()
             except Exception:
                 pass
+
         self.destroy()
     # Supporter functions
     def update_style(self):
@@ -503,11 +778,9 @@ class Playback(tk.Tk):
         """
         Extracts if / else if / else structure.
         Returns: (condition, if_block, else_block, ending_index)
-
         Nested ifs (without else) are handled by brace-depth matching in
         _extract_block; the nested statements remain as lines inside if_block
         and are re-parsed when the block is executed.
-
         else-if chains are handled by a single recursive call on a sliced
         remainder (converted to a plain "If"), guaranteeing termination
         because each recursion receives a strictly shorter list.
@@ -524,7 +797,9 @@ class Playback(tk.Tk):
             if not current or current.startswith(";"):
                 i += 1
                 continue
+
             break
+
         else:
             # Reached end of actions with no else / else-if
             return condition, if_block, else_block, end_index
@@ -557,7 +832,6 @@ class Playback(tk.Tk):
             else_block, else_end = self._extract_block(actions, i)
             end_index = else_end
         # else: plain if with no else clause – keep the end_index we already have
-
         return condition, if_block, else_block, end_index
 
     def _evaluate_condition(self, condition):
@@ -614,6 +888,7 @@ class Playback(tk.Tk):
             except:
                 messagebox.showerror("title", f"Error at line {self.current_line_count + 1}\n\nLine text: {error[2]}\n{error[5]}\n\nThe program will exit")
             raise SyntaxError(e)
+
     def _normalize_inline_else_lines(self, actions):
         normalized = []
         for action in actions:
@@ -631,13 +906,10 @@ class Playback(tk.Tk):
         condition = condition.replace("<>", "!=")
         condition = condition.replace("||", " or ")
         condition = condition.replace("&&", " and ")
-
         # !expression -> not expression
         condition = re.sub(r'!(?!=)', 'not ', condition)
-
         # = -> ==
         condition = re.sub(r'(?<![<>=!:])=(?!=)', '==', condition)
-
         return condition
 
     def _evaluate_loop_count(self, line):
@@ -749,11 +1021,9 @@ class Playback(tk.Tk):
         self.hotkey_enabled.clear()
         self.hotkey_actions.clear()
         # Note: hotkey_bindings is intentionally NOT cleared so dynamic Hotkey,On can persist
-
         self.current_line_count = 0
         while self.current_line_count < len(actions):
             line = self._strip_inline_comment(actions[self.current_line_count].strip())
-
             # Function definition
             if self._is_function_definition(line):
                 name = line.split("(", 1)[0].strip()
@@ -761,7 +1031,6 @@ class Playback(tk.Tk):
                 self.functions[name] = body
                 # Skip the function body so sequential execution does not run it
                 self.current_line_count = end_index
-
             # Label definition
             elif self._is_label_definition(line):
                 name = line.rstrip(":").strip()  # Remove one or more trailing colons
@@ -772,7 +1041,6 @@ class Playback(tk.Tk):
                 self.labels[name] = body_lines
                 # Skip the label body
                 self.current_line_count = end_index
-
             # Hotkey Labels  (e.g. F1::  or  ^!s:: )
             else:
                 m = re.match(r"^([^\s:]+)::$", line)
@@ -788,146 +1056,7 @@ class Playback(tk.Tk):
                     self.hotkey_actions[normalized_key] = body_lines
                     # Skip the hotkey body during sequential execution
                     self.current_line_count = end_index
-
             self.current_line_count = self.current_line_count + 1
-
-    def _normalize_pynput_key(self, key):
-        """Convert a pynput key event to an AHK-style uppercase key name (F1, A, SPACE, etc.)."""
-        try:
-            if key is None:
-                return None
-            if hasattr(key, "char") and key.char is not None:
-                char = key.char
-                if char in {"\r", "\n"}:
-                    return "ENTER"
-                if char == " ":
-                    return "SPACE"
-                return char.upper()
-
-            name = str(key).replace("Key.", "").upper()
-            aliases = {
-                "SPACE": "SPACE",
-                "ENTER": "ENTER",
-                "RETURN": "ENTER",
-                "ESC": "ESCAPE",
-                "ESCAPE": "ESCAPE",
-                "BACKSPACE": "BACKSPACE",
-                "TAB": "TAB",
-                "SHIFT": "SHIFT",
-                "CTRL": "CTRL",
-                "CONTROL": "CTRL",
-                "CTRL_L": "CTRL",
-                "CTRL_R": "CTRL",
-                "ALT": "ALT",
-                "ALT_L": "ALT",
-                "ALT_R": "ALT",
-                "CMD": "LWIN",
-                "CMD_L": "LWIN",
-                "CMD_R": "RWIN",
-                "SUPER": "LWIN",
-                "SUPER_L": "LWIN",
-                "SUPER_R": "RWIN",
-                "LEFT": "LEFT",
-                "RIGHT": "RIGHT",
-                "UP": "UP",
-                "DOWN": "DOWN",
-                "PAGEUP": "PGUP",
-                "PAGEDOWN": "PGDN",
-                "HOME": "HOME",
-                "END": "END",
-                "INSERT": "INSERT",
-                "DELETE": "DELETE",
-                "CAPSLOCK": "CAPSLOCK",
-            }
-            return aliases.get(name, name)
-        except Exception:
-            return None
-
-    def _normalize_hotkey_name(self, key_name):
-        """Normalize AHK-style hotkey names so they can be compared with pynput events."""
-        if key_name is None:
-            return ""
-
-        raw = str(key_name).strip().replace(" ", "")
-        if not raw:
-            return ""
-
-        modifiers = []
-        main_parts = []
-        i = 0
-        while i < len(raw):
-            ch = raw[i]
-            if ch == "^":
-                modifiers.append("CTRL")
-                i += 1
-            elif ch == "!":
-                modifiers.append("ALT")
-                i += 1
-            elif ch == "+":
-                modifiers.append("SHIFT")
-                i += 1
-            elif ch == "#":
-                modifiers.append("LWIN")
-                i += 1
-            else:
-                j = i
-                while j < len(raw) and raw[j] not in "^!+#":
-                    j += 1
-                token = raw[i:j].upper()
-                if token in {"CTRL", "CONTROL", "CTL"}:
-                    modifiers.append("CTRL")
-                elif token in {"ALT"}:
-                    modifiers.append("ALT")
-                elif token in {"SHIFT"}:
-                    modifiers.append("SHIFT")
-                elif token in {"WIN", "LWIN", "RWIN", "SUPER", "LSUPER", "RSUPER"}:
-                    modifiers.append("LWIN")
-                else:
-                    main_parts.append(token)
-                i = j
-
-        if not main_parts:
-            return "+".join(modifiers)
-
-        main = "".join(main_parts)
-        if not modifiers:
-            return main
-        return "+".join(modifiers + [main])
-
-    def on_key_release(self, key):
-        """Clear active modifiers when a modifier key is released."""
-        normalized = self._normalize_pynput_key(key)
-        if normalized in {"CTRL", "ALT", "SHIFT", "LWIN"}:
-            self._active_hotkey_modifiers.discard(normalized)
-
-    def on_key_press(self, key):
-        """Dispatch a registered hotkey when a pynput key press matches a known binding."""
-        normalized = self._normalize_pynput_key(key)
-        if normalized is None:
-            return
-
-        if normalized in {"CTRL", "ALT", "SHIFT", "LWIN"}:
-            self._active_hotkey_modifiers.add(normalized)
-            return
-
-        combo = []
-        for modifier in ("CTRL", "ALT", "SHIFT", "LWIN"):
-            if modifier in self._active_hotkey_modifiers:
-                combo.append(modifier)
-        combo.append(normalized)
-        combo_name = "+".join(combo)
-
-        if not self.hotkey_enabled.get(combo_name, False):
-            return
-
-        action = self.hotkey_actions.get(combo_name)
-        if action is None:
-            return
-
-        if isinstance(action, list):
-            self._execute_script(action)
-        elif isinstance(action, str) and action in self.labels:
-            self.execute_gosub(action)
 
     def _is_function_definition(self, line):
         "Detects AHK functions"
@@ -955,6 +1084,7 @@ class Playback(tk.Tk):
         else:
             messagebox.showerror("title", f"Error: Call to nonexistent function\nSpecifically: {label_name}\n\n--->    {self.current_line_count}: {self.script[self.current_line_count - 1]}\n\nThe program will exit")
             raise NameError(label_name)
+
     def _extract_label_block(self, actions, start):
         body = []
         i = start
@@ -977,8 +1107,10 @@ class Playback(tk.Tk):
             try:
                 with open(filename, "r", encoding=encoding) as f:
                     return f.readlines()
+
             except UnicodeError:
                 pass
+
         raise UnicodeError(f"Unable to read {filename}")
 
     def capture_single_frame(self):
@@ -995,7 +1127,9 @@ class Playback(tk.Tk):
             )
             if image is None:
                 return None
+
             return cgimage_to_srgb_numpy(image)
+
         else:
             scale = self._get_scale_factor()
             with MSS() as sct:
@@ -1024,7 +1158,6 @@ class Playback(tk.Tk):
                 if time.monotonic() - self.last_scan_request > 1:
                     self.scan_delay = 1
                 time.sleep(self.scan_delay)
-
     def capture_loop_quartz(self):
         """Continuous capture loop for the macro (macOS)."""
         self.capture_id = 0
@@ -1047,12 +1180,10 @@ class Playback(tk.Tk):
             if time.monotonic() - self.last_scan_request > 1:
                 self.scan_delay = 1
             time.sleep(self.scan_delay)
-
     def get_screen_dpi(self):
         if sys.platform == "win32":
             try:
                 user32 = ctypes.windll.user32
-
                 if hasattr(user32, "GetDpiForSystem"):
                     screen_dpi = user32.GetDpiForSystem()
                 else:
@@ -1061,7 +1192,6 @@ class Playback(tk.Tk):
                     gdi32 = ctypes.windll.gdi32
                     screen_dpi = gdi32.GetDeviceCaps(hdc, LOGPIXELSX)
                     user32.ReleaseDC(0, hdc)
-
             except Exception:
                 screen_dpi = 96
         else:
@@ -1102,13 +1232,15 @@ class Playback(tk.Tk):
 
             else:
                 return string[start:string_len + length]
-            
+
         def WinExist(window):
             return False
 
         return {
+
             **self.builtin_variables,
             **self.variables,
+            "A_TickCount": int(time.monotonic() * 1000),
             "RTrim": RTrim,
             "InStr": InStr,
             "SubStr": SubStr,
@@ -1129,7 +1261,6 @@ class Playback(tk.Tk):
             "IsNumber": lambda v: str(v).replace(".", "", 1).isdigit(),
             "WinExist": WinExist,
         }
-    
     def _handle_assignment(self, action):
         """
         Split the value and the target variables, then update the value based on the target variable.
@@ -1147,17 +1278,14 @@ class Playback(tk.Tk):
 
             # Convert common AHK syntax into Python syntax first
             expr = value
-
             # AHK string concatenation -> Python
             expr = re.sub(r"\s+\.\s+", " + ", expr)
-
             # Escape backslashes inside quoted strings
             def escape_string(match):
                 text = match.group(0)
                 return text.replace("\\", "\\\\")
 
             expr = re.sub(r'"[^"]*"', escape_string, expr)
-
             try:
                 self.variables[var] = eval(expr, {}, self._get_eval_namespace())
             except Exception as e:
@@ -1174,22 +1302,18 @@ class Playback(tk.Tk):
             var, rhs = action.split(".=", 1)
             var = var.strip()
             rhs = rhs.strip()
-
             # Resolve %Var% references first
             rhs = self._handle_variable(rhs)
-
             try:
                 # Valid Python expression?
                 rhs = eval(rhs, {}, self._get_eval_namespace())
             except Exception:
                 # AHK-style concatenation (e.g. FileName "|" Var2)
                 result = ""
-
                 tokens = re.findall(
                     r'"[^"]*"|\'[^\']*\'|[A-Za-z_]\w*|\S',
                     rhs
                 )
-
                 for token in tokens:
                     if token.startswith('"') or token.startswith("'"):
                         # String literal
@@ -1201,9 +1325,7 @@ class Playback(tk.Tk):
                     else:
                         # Operators/punctuation/literal text
                         result += token
-
                 rhs = result
-
             self.variables[var] = str(self.variables.get(var, "")) + str(rhs)
             return True
 
@@ -1247,6 +1369,7 @@ class Playback(tk.Tk):
         "Handles %Var%"
         if not isinstance(text, str):
             return text
+
         def replacer(match):
             var_name = match.group(1)
             # Priority: user variables
@@ -1265,8 +1388,8 @@ class Playback(tk.Tk):
         "Handles Var"
         if not isinstance(value, str):
             return value
-        value = value.strip()
 
+        value = value.strip()
         # Direct variable lookup (PixelSearch, MouseMove, etc.)
         if value in self.variables:
             return self.variables[value]
@@ -1283,6 +1406,7 @@ class Playback(tk.Tk):
         """
         if not color:
             return None
+
         color = color.strip().lower()
         try:
             # --- AHK format: 0xBBGGRR ---
@@ -1292,6 +1416,7 @@ class Playback(tk.Tk):
                 g = (value >> 8) & 0xFF
                 r = value & 0xFF
                 return (r, g, b)  # ✅ RGB
+
             # --- Standard hex: #RRGGBB ---
             if color.startswith("#"):
                 color = color[1:]
@@ -1299,8 +1424,10 @@ class Playback(tk.Tk):
                 g = int(color[2:4], 16)
                 b = int(color[4:6], 16)
                 return (r, g, b)
+
         except Exception:
             return None
+
         return None
 
     def _find_first_pixel(self, frame, hex, tolerance=8):
@@ -1314,7 +1441,6 @@ class Playback(tk.Tk):
         diff = frame_i - target
         mask = np.sqrt(np.sum(diff ** 2, axis=-1)) <= tolerance
         coords = np.argwhere(mask)
-
         if coords.size > 0:
             y, x = coords[0]
             return int(x), int(y)
@@ -1324,90 +1450,65 @@ class Playback(tk.Tk):
     def cmd_splitpath(self, line):
         """
         SplitPath, InputVar, OutFileName, OutDir, OutExtension, OutNameNoExt, OutDrive
-
         Examples:
             SplitPath, A_LoopFileName,,, Extension, FileName
         """
-
         parts = [p.strip() for p in line.split(",")]
         parts = parts[1:]
-
         # Pad missing parameters
         while len(parts) < 6:
             parts.append("")
-
         input_path, out_file, out_dir, out_ext, out_name, out_drive = parts[:6]
-
         # Remove surrounding quotes if present
         input_path2 = input_path.strip('"').strip("'")
         if input_path2 == input_path:
             input_path = f"%{input_path}%"
-
         # Resolve variables like %A_LoopFileName%
         input_path = self._handle_variable(input_path)
-
         directory = os.path.dirname(input_path)
         filename = os.path.basename(input_path)
         name_no_ext, extension = os.path.splitext(filename)
         extension = extension.lstrip(".")
         drive, _ = os.path.splitdrive(input_path)
-
         # Assign only requested outputs
         if out_file:
             self.variables[out_file] = filename
-
         if out_dir:
             self.variables[out_dir] = directory
-
         if out_ext:
             self.variables[out_ext] = extension
-
         if out_name:
             self.variables[out_name] = name_no_ext
-
         if out_drive:
             self.variables[out_drive] = drive
-
     def cmd_guicontrol(self, action):
         parts = [x.strip() for x in action.split(",", 3)]
-
         # GuiControl, SubCommand, Control, Value
         while len(parts) < 4:
             parts.append("")
-
         _, subcommand, control, value = parts
-
         widget = self.gui_controls.get(control)
-
         if widget is None:
             return
 
         subcommand = subcommand.lower()
-
         if subcommand == "":
             # Set text/value
             if isinstance(widget, tk.Entry):
                 widget.delete(0, tk.END)
                 widget.insert(0, value)
-
             elif isinstance(widget, ttk.Combobox):
                 widget.set(value)
-
             elif isinstance(widget, tk.Label):
                 widget.config(text=value)
-
             elif isinstance(widget, tk.Button):
                 widget.config(text=value)
-
         elif subcommand == "enable":
             widget.configure(state="normal")
-
         elif subcommand == "disable":
             widget.configure(state="disabled")
-
         elif subcommand == "hide":
             widget.place_forget()
-
         elif subcommand == "show":
             # you'll need to remember its original x/y
             pass
@@ -1417,22 +1518,20 @@ class Playback(tk.Tk):
         Emulate AHK Hotkey command (basic On/Off support):
             Hotkey, %StartKey%, StartMacro, On
             Hotkey, %StopKey%, StopMacro, Off
-
         Syntax supported:
             Hotkey, KeyName, LabelName, On|Off
             Hotkey, KeyName, LabelName          (defaults to On)
         """
         if "," not in action:
             return
+
         _, rest = action.split(",", 1)
         parts = [p.strip() for p in rest.split(",")]
         while len(parts) < 3:
             parts.append("")
-
         key_name = parts[0].upper()
         label_name = parts[1]
         state = parts[2].lower() if parts[2] else "on"
-
         if not key_name:
             return
 
@@ -1447,7 +1546,6 @@ class Playback(tk.Tk):
         elif state in ("off", "0", "false"):
             self.hotkey_enabled[normalized_key] = False
             self.hotkey_actions.pop(normalized_key, None)
-
     def cmd_pixelsearch(self, line):
         self.last_scan_request = time.monotonic()
         self.scan_delay = 0.01
@@ -1455,12 +1553,10 @@ class Playback(tk.Tk):
         parts = [p.strip() for p in args.split(",")]
         out_x = parts[0]
         out_y = parts[1]
-
         left = int(float(self._resolve_value(parts[2])))
         top = int(float(self._resolve_value(parts[3])))
         right = int(float(self._resolve_value(parts[4])))
         bottom = int(float(self._resolve_value(parts[5])))
-
         color = parts[6]
         # Strip trailing AHK options like "Fast", "RGB"
         tolerance = 8
@@ -1469,14 +1565,11 @@ class Playback(tk.Tk):
                 tolerance = int(float(parts[7]))
             except:
                 tolerance = 8
-
         color = self._resolve_value(color)
         tolerance = self._resolve_value(tolerance)
-
         mode_flags = [p.lower() for p in parts[8:]]
         fast_mode = "fast" in mode_flags
         rgb_mode = "rgb" in mode_flags
-
         scale = get_scale_factor()
         if color.startswith("0x") and rgb_mode == True:
             parsed_color = self._parse_ahk_color(color)
@@ -1488,6 +1581,7 @@ class Playback(tk.Tk):
             self.variables[out_y] = -1
             self.variables["ErrorLevel"] = 1
             return
+
         x, y = self._find_first_pixel(img, parsed_color, tolerance)
         if x is not None and y is not None:
             self.variables[out_x] = int((x + left) / scale)
@@ -1499,60 +1593,14 @@ class Playback(tk.Tk):
             self.variables["ErrorLevel"] = 1
         return
 
-    def _send_key(self, key2, delay=0.05, click_type=0):
+    def _cmd_send(self, action):
         """
-        Send a keyboard event.
-        delay: Delay between send and release
-        click_type:
-            0 = click (press + release)   [default]
-            1 = hold (press only)
-            2 = release (release only)
-        """
-        if self.macro_running == False:
-            return
-
-        key = str(key2)
-        if sys.platform == "darwin":
-            send_key(key2, delay=delay, click_type=click_type)
-        else:
-            # Convert special key names
-            special_keys = {
-                "enter": Key.enter,
-                "return": Key.enter,
-                "tab": Key.tab,
-                "space": Key.space,
-                "esc": Key.esc,
-                "escape": Key.esc,
-                "backspace": Key.backspace,
-                "delete": Key.delete,
-                "up": Key.up,
-                "down": Key.down,
-                "left": Key.left,
-                "right": Key.right,
-            }
-            key = special_keys.get(key.lower(), key)
-            try:
-                if click_type == 0:
-                    keyboard_controller.press(key)
-                    time.sleep(delay)
-                    keyboard_controller.release(key)
-                elif click_type == 1:
-                    keyboard_controller.press(key)
-                elif click_type == 2:
-                    keyboard_controller.release(key)
-            except Exception as e:
-                print("Error sending keys:", e)
-    
-    def _cmd_click(self, action):
-        """
-        Supports AHK Click syntax variants (Normal click only for now):
-          Click                          → left click at current pos
-          Click, X, Y                    → left click at X, Y
-          Click, X, Y, Down Right        → press right button at X, Y
-          Click, Down                    → press left button at current pos
-          Click, Right                   → right click at current pos
-          Click, Down Right              → press right button at current pos
-          (any combination of optional X, Y, Down/Up, Left/Right/Middle)
+        Parse AHK "Send" format into key, delay, and click type
+        Supports:
+        Send, 67
+        Send, D
+        Send, {Down}
+        Send, {W down}
         """
         try:
             # Split off the command name; args may be empty
@@ -1561,56 +1609,88 @@ class Playback(tk.Tk):
                 parts = [p.strip() for p in args.split(",")]
             else:
                 parts = []
-            # Classify each token: numeric → coordinate, else → modifier word
-            # AHK order: [X, Y,] [Down|Up] [Left|Right|Middle]
+            if parts[0] == "SendMode":
+                backend = parts[1]
+                self.send_backend = backend
+                return
+
+            if parts[0] == "Send":
+                backend = self.send_backend # "Event" by default
+            elif parts[0] == "SendInput":
+                backend = "Input"
+            elif parts[0] == "SendEvent":
+                backend = "Event"
+            elif parts[0] == "SendPlay":
+                backend = "Play"
+            click_type = 0 # Temporary
+            self._send_key(parts[1], backend, self.key_delay, click_type)
+        except:
+            pass
+
+        return
+
+    def _cmd_click(self, action):
+        """
+        Parse AHK Click syntax and pass the resolved values to _click_at().
+        Supported forms:
+          Click
+          Click, X, Y
+          Click, X, Y, Down
+          Click, X, Y, Up
+          Click, X, Y, Right
+          Click, X, Y, Down Right
+          Click, Down Right
+          Click, X, Y, Middle
+        """
+        try:
+            # Split off the command name; args may be empty
+            if "," in action:
+                _, args = action.split(",", 1)
+                parts = [p.strip() for p in args.split(",")]
+            else:
+                parts = []
             coords = []
             modifiers = []
+            # Extract coordinates and modifier words.
             for p in parts:
-                if p == "":
+                if not p:
                     continue
 
                 try:
                     coords.append(int(float(p)))
                 except ValueError:
-                    # Could be "Down Right" in one comma-field, split on spaces
                     for word in p.split():
                         modifiers.append(word.lower())
-            # Resolve X, Y
+            # Resolve X/Y.
             if len(coords) >= 2:
                 x, y = coords[0], coords[1]
-                move = True
             else:
-                move = False   # stay at current cursor position
-            # Resolve button and down/up from modifier words
-            btn_map = {
-                "left": mouse.Button.left,
-                "l":    mouse.Button.left,
-                "right": mouse.Button.right,
-                "r":    mouse.Button.right,
-                "middle": mouse.Button.middle,
-                "m":    mouse.Button.middle,
-            }
-            direction_words = {"down", "up"}
-            button_words    = set(btn_map.keys())
-            down_up = "click"   # default: full click
-            button  = mouse.Button.left  # default button
+                x, y = None, None
+            # Resolve button.
+            button = "left"
             for word in modifiers:
-                if word in direction_words:
-                    down_up = word
-                elif word in button_words:
-                    button = btn_map[word]
-            # Move if coordinates were supplied
-            if move:
-                mouse_controller.position = (x, y)
-            # Execute
-            if down_up == "down":
-                mouse_controller.press(button)
-            elif down_up == "up":
-                mouse_controller.release(button)
-            else:
-                mouse_controller.click(button)
-            return
-
+                if word in {"right", "r"}:
+                    button = "right"
+                elif word in {"middle", "m"}:
+                    button = "middle"
+                elif word in {"left", "l"}:
+                    button = "left"
+            # Resolve action.
+            click_action = "click"
+            for word in modifiers:
+                if word == "down":
+                    click_action = "down"
+                elif word == "up":
+                    click_action = "up"
+            # SendMode determines the backend used by Click.
+            backend = self.send_backend
+            self._click_at(
+                x,
+                y,
+                backend,
+                button=button,
+                action=click_action
+            )
         except Exception as e:
             return e
 
@@ -1621,29 +1701,35 @@ class Playback(tk.Tk):
     def _cmd_mousemove(self, action):
         _, args = action.split(",", 1)
         x, y = [int(v.strip()) for v in args.split(",")]
-        mouse_controller.position = (x, y)
-
     def cmd_ini(self, action):
         parts = [x.strip() for x in action.split(",")]
         command = parts[0].lower()
-
         if command == "iniread":
             if len(parts) < 5:
                 raise SyntaxError(f"{action}, IniRead requires OutputVar, Filename, Section, Key")
 
             output_var, filename, section, key = parts[1:5]
             default = parts[5] if len(parts) > 5 else "ERROR"
-
-            value = ""
-
+            # Resolve %Var% references in parameters (AHK style)
+            filename = self._handle_variable(filename)
+            section = self._handle_variable(section)
+            key = self._handle_variable(key)
+            default = self._handle_variable(default)
+            # Strip surrounding quotes if present
+            filename = filename.strip('"').strip("'")
+            section = section.strip('"').strip("'")
+            key = key.strip('"').strip("'")
+            default = default.strip('"').strip("'")
+            # Start with the default; only overwrite if the key is actually found
+            value = default
             if os.path.exists(filename):
-                lines = self.read_ini(filename)
-
+                try:
+                    lines = self.read_ini(filename)
+                except Exception:
+                    lines = []
                 current_section = None
-
                 for line in lines:
                     stripped = line.strip()
-
                     if stripped.startswith("[") and stripped.endswith("]"):
                         current_section = stripped[1:-1]
                         continue
@@ -1656,8 +1742,6 @@ class Playback(tk.Tk):
                         if k.strip() == key:
                             value = v.rstrip("\r\n")
                             break
-                    else:
-                        value = default
 
             self.variables[output_var] = value
             return
@@ -1667,29 +1751,31 @@ class Playback(tk.Tk):
                 raise SyntaxError("{action}: IniWrite requires Value, Filename, Section, Key")
 
             value, filename, section, key = parts[1:5]
-
+            # Resolve %Var% references
+            value = self._handle_variable(value)
+            filename = self._handle_variable(filename)
+            section = self._handle_variable(section)
+            key = self._handle_variable(key)
+            filename = filename.strip('"').strip("'")
+            section = section.strip('"').strip("'")
+            key = key.strip('"').strip("'")
             if os.path.exists(filename):
                 lines = self.read_ini(filename)
             else:
                 lines = []
-
             found_section = False
             written = False
             output = []
-
             i = 0
             while i < len(lines):
                 line = lines[i]
                 stripped = line.strip()
-
                 if stripped.startswith("[") and stripped.endswith("]"):
                     if found_section and not written:
                         output.append(f"{key}={value}\n")
                         written = True
-
                     current_section = stripped[1:-1]
                     found_section = (current_section == section)
-
                     output.append(line)
                     i += 1
                     continue
@@ -1704,21 +1790,382 @@ class Playback(tk.Tk):
 
                 output.append(line)
                 i += 1
-
             if not found_section:
                 if output and not output[-1].endswith("\n"):
                     output.append("\n")
                 output.append(f"[{section}]\n")
                 output.append(f"{key}={value}\n")
-
             elif found_section and not written:
                 output.append(f"{key}={value}\n")
-
             with open(filename, "w", encoding="utf-16") as f:
                 f.writelines(output)
-
             return
 
+    # ── Window commands (WinExist / WinActivate / WinGetPos) ──────────────────
+    def _parse_window_criteria(self, criteria):
+        """
+        Parse AHK-style window matching criteria.
+        Returns dict with keys: title, exe, class_name, hwnd
+        Examples:
+            "Roblox"
+            "ahk_exe RobloxPlayerBeta.exe"
+            "My Title ahk_exe notepad.exe"
+            "ahk_class Notepad"
+        """
+        criteria = str(criteria or "").strip().strip('"').strip("'")
+        result = {
+            "title": None,
+            "exe": None,
+            "class_name": None,
+            "hwnd": None,
+        }
+        if not criteria:
+            return result
+
+        # Extract ahk_ tokens (order independent)
+        remaining = criteria
+        # ahk_exe
+        m = re.search(r"\bahk_exe\s+([^\s]+)", remaining, re.IGNORECASE)
+        if m:
+            result["exe"] = m.group(1)
+            remaining = remaining[:m.start()] + remaining[m.end():]
+        # ahk_class
+        m = re.search(r"\bahk_class\s+([^\s]+)", remaining, re.IGNORECASE)
+        if m:
+            result["class_name"] = m.group(1)
+            remaining = remaining[:m.start()] + remaining[m.end():]
+        # ahk_id (hwnd)
+        m = re.search(r"\bahk_id\s+([^\s]+)", remaining, re.IGNORECASE)
+        if m:
+            try:
+                result["hwnd"] = int(m.group(1), 0)  # accept hex or decimal
+            except ValueError:
+                pass
+
+            remaining = remaining[:m.start()] + remaining[m.end():]
+        # Whatever is left is treated as title (partial match)
+        title = remaining.strip()
+        if title:
+            result["title"] = title
+        return result
+
+    def _window_matches(self, info, criteria):
+        """
+        info: dict with at least title, exe, class_name, hwnd (platform normalised)
+        criteria: from _parse_window_criteria
+        """
+        if criteria.get("hwnd") is not None:
+            if info.get("hwnd") != criteria["hwnd"]:
+                return False
+
+        if criteria.get("exe"):
+            want = criteria["exe"].lower()
+            # Allow matching with or without .exe
+            if want.endswith(".exe"):
+                want_base = want[:-4]
+            else:
+                want_base = want
+            have = (info.get("exe") or "").lower()
+            have_base = have[:-4] if have.endswith(".exe") else have
+            if want not in have and want_base not in have_base and have_base not in want_base:
+                return False
+
+        if criteria.get("class_name"):
+            if (info.get("class_name") or "").lower() != criteria["class_name"].lower():
+                return False
+
+        if criteria.get("title"):
+            title = (info.get("title") or "")
+            # AHK default: partial, case-insensitive
+            if criteria["title"].lower() not in title.lower():
+                return False
+
+        # If no criteria at all were given, match nothing (or everything? AHK matches last found)
+        # Require at least one criterion to have been specified
+        if not any([criteria.get("title"), criteria.get("exe"),
+                    criteria.get("class_name"), criteria.get("hwnd") is not None]):
+            return False
+
+        return True
+
+    def _list_windows(self):
+        """
+        Return a list of window info dicts for the current platform.
+        Each dict: {hwnd, title, exe, class_name, left, top, width, height}
+        """
+        windows = []
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                kernel32 = ctypes.windll.kernel32
+                EnumWindows = user32.EnumWindows
+                EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+                GetWindowText = user32.GetWindowTextW
+                GetWindowTextLength = user32.GetWindowTextLengthW
+                IsWindowVisible = user32.IsWindowVisible
+                GetClassName = user32.GetClassNameW
+                GetWindowRect = user32.GetWindowRect
+                GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+                # Try to resolve process image name
+                try:
+                    QueryFullProcessImageNameW = kernel32.QueryFullProcessImageNameW
+                    OpenProcess = kernel32.OpenProcess
+                    CloseHandle = kernel32.CloseHandle
+                    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                    has_query = True
+                except AttributeError:
+                    has_query = False
+                def get_exe(pid):
+                    if not has_query or not pid:
+                        return ""
+
+                    h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                    if not h:
+                        return ""
+
+                    try:
+                        buf = ctypes.create_unicode_buffer(1024)
+                        size = wintypes.DWORD(1024)
+                        if QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                            path = buf.value
+                            return os.path.basename(path)
+
+                    finally:
+                        CloseHandle(h)
+                    return ""
+
+                def callback(hwnd, lParam):
+                    if not IsWindowVisible(hwnd):
+                        return True
+
+                    length = GetWindowTextLength(hwnd)
+                    buff = ctypes.create_unicode_buffer(length + 1)
+                    GetWindowText(hwnd, buff, length + 1)
+                    title = buff.value
+                    class_buf = ctypes.create_unicode_buffer(256)
+                    GetClassName(hwnd, class_buf, 256)
+                    class_name = class_buf.value
+                    rect = wintypes.RECT()
+                    GetWindowRect(hwnd, ctypes.byref(rect))
+                    left, top = rect.left, rect.top
+                    width = rect.right - rect.left
+                    height = rect.bottom - rect.top
+                    pid = wintypes.DWORD()
+                    GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    exe = get_exe(pid.value)
+                    windows.append({
+                        "hwnd": int(hwnd),
+                        "title": title,
+                        "exe": exe,
+                        "class_name": class_name,
+                        "left": left,
+                        "top": top,
+                        "width": width,
+                        "height": height,
+                    })
+                    return True
+
+                EnumWindows(EnumWindowsProc(callback), 0)
+            except Exception:
+                pass
+
+        elif sys.platform == "darwin":
+            try:
+                options = (Quartz.kCGWindowListOptionOnScreenOnly |
+                           Quartz.kCGWindowListExcludeDesktopElements)
+                window_list = Quartz.CGWindowListCopyWindowInfo(options, Quartz.kCGNullWindowID)
+                if window_list:
+                    for win in window_list:
+                        owner = win.get(Quartz.kCGWindowOwnerName, "") or ""
+                        title = win.get(Quartz.kCGWindowName, "") or ""
+                        bounds = win.get(Quartz.kCGWindowBounds, {})
+                        hwnd = win.get(Quartz.kCGWindowNumber, 0)
+                        windows.append({
+                            "hwnd": int(hwnd) if hwnd else 0,
+                            "title": title,
+                            "exe": owner,          # process name acts as "exe"
+                            "class_name": "",
+                            "left": int(bounds.get("X", 0)),
+                            "top": int(bounds.get("Y", 0)),
+                            "width": int(bounds.get("Width", 0)),
+                            "height": int(bounds.get("Height", 0)),
+                        })
+            except Exception:
+                pass
+
+        elif sys.platform.startswith("linux"):
+            try:
+                d = Xdisplay.Display()
+                root = d.screen().root
+                window_ids = root.get_full_property(
+                    d.intern_atom("_NET_CLIENT_LIST"), X.AnyPropertyType
+                )
+                if window_ids:
+                    for wid in window_ids.value:
+                        try:
+                            win = d.create_resource_object("window", wid)
+                            # Title
+                            title = ""
+                            try:
+                                wm_name = win.get_wm_name()
+                                if wm_name:
+                                    title = wm_name if isinstance(wm_name, str) else str(wm_name)
+                            except Exception:
+                                pass
+
+                            # Class / instance
+                            class_name = ""
+                            exe = ""
+                            try:
+                                wm_class = win.get_wm_class()
+                                if wm_class:
+                                    class_name = wm_class[1] if len(wm_class) > 1 else wm_class[0]
+                                    exe = wm_class[0] if wm_class else ""
+                            except Exception:
+                                pass
+
+                            # Geometry
+                            geom = win.get_geometry()
+                            # Translate to root coordinates
+                            try:
+                                abs_coords = root.translate_coords(win, 0, 0)
+                                left, top = abs_coords.x, abs_coords.y
+                            except Exception:
+                                left, top = geom.x, geom.y
+                            windows.append({
+                                "hwnd": int(wid),
+                                "title": title or "",
+                                "exe": exe or "",
+                                "class_name": class_name or "",
+                                "left": left,
+                                "top": top,
+                                "width": geom.width,
+                                "height": geom.height,
+                            })
+                        except Exception:
+                            continue
+
+                d.close()
+            except Exception:
+                pass
+
+        return windows
+
+    def _find_window(self, criteria_str):
+        """Find the first matching window. Returns info dict or None."""
+        criteria = self._parse_window_criteria(criteria_str)
+        for info in self._list_windows():
+            if self._window_matches(info, criteria):
+                return info
+
+        return None
+
+    def win_exist(self, criteria=""):
+        """AHK-compatible WinExist. Returns True if a matching window is found."""
+        return self._find_window(criteria) is not None
+
+    def cmd_winactivate(self, action):
+        """
+        WinActivate [, WinTitle]
+        Brings the matching window to the foreground.
+        """
+        # Parse: WinActivate, Title   or   WinActivate Title
+        if "," in action:
+            _, rest = action.split(",", 1)
+            criteria = rest.strip()
+        else:
+            parts = action.split(None, 1)
+            criteria = parts[1] if len(parts) > 1 else ""
+        criteria = self._handle_variable(criteria)
+        info = self._find_window(criteria)
+        if info is None:
+            return
+
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                hwnd = info["hwnd"]
+                # Restore if minimized
+                if user32.IsIconic(hwnd):
+                    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
+
+        elif sys.platform == "darwin":
+            try:
+                # Prefer process name (exe) for activation
+                process_name = info.get("exe") or ""
+                title = info.get("title") or ""
+                if process_name:
+                    script = f'''
+                    tell application "System Events"
+                        set frontmost of process "{process_name}" to true
+                    end tell
+                    '''
+                else:
+                    # Fallback by title (less reliable)
+                    script = f'''
+                    tell application "System Events"
+                        set procs to every process whose name contains "{title}"
+                        if (count of procs) > 0 then
+                            set frontmost of item 1 of procs to true
+                        end if
+                    end tell
+                    '''
+                subprocess.run(["osascript", "-e", script],
+                               capture_output=True, text=True, timeout=3)
+            except Exception:
+                pass
+
+        elif sys.platform.startswith("linux"):
+            try:
+                d = Xdisplay.Display()
+                win = d.create_resource_object("window", info["hwnd"])
+                win.set_input_focus(X.RevertToParent, X.CurrentTime)
+                win.configure(stack_mode=X.Above)
+                d.sync()
+                d.close()
+            except Exception:
+                pass
+
+    def cmd_wingetpos(self, action):
+        """
+        WinGetPos, OutX, OutY, OutWidth, OutHeight [, WinTitle]
+        Retrieves the position and size of the matching window.
+        """
+        # Split after command name
+        if "," not in action:
+            return
+
+        _, rest = action.split(",", 1)
+        parts = [p.strip() for p in rest.split(",")]
+        # Pad to at least 5 slots: OutX, OutY, OutW, OutH, WinTitle
+        while len(parts) < 5:
+            parts.append("")
+        out_x, out_y, out_w, out_h, criteria = parts[:5]
+        criteria = self._handle_variable(criteria)
+        info = self._find_window(criteria)
+        if info is None:
+            # AHK leaves the variables unchanged if not found; we set to 0 for safety
+            if out_x:
+                self.variables[out_x] = 0
+            if out_y:
+                self.variables[out_y] = 0
+            if out_w:
+                self.variables[out_w] = 0
+            if out_h:
+                self.variables[out_h] = 0
+            return
+
+        if out_x:
+            self.variables[out_x] = info["left"]
+        if out_y:
+            self.variables[out_y] = info["top"]
+        if out_w:
+            self.variables[out_w] = info["width"]
+        if out_h:
+            self.variables[out_h] = info["height"]
     def cmd_gui(self, line):
         """Supports Gui commands like Gui, Tab"""
         # Helper function to safely convert to int, handling floats
@@ -1766,6 +2213,7 @@ class Playback(tk.Tk):
                             options["y"] = str(int(float(options["y"])) - 30 - safe_int(self.offset_y))
                 except:
                     pass
+
             # Tabs
             if "|" in command4:
                 tabs = command4.split("|")
@@ -1916,6 +2364,7 @@ class Playback(tk.Tk):
                         combobox.bind("<<ComboboxSelected>>", lambda event: self.execute_gosub(options["g"]))
                     except:
                         pass
+
             elif command2 == "DropDownList":
                 values = command4.split("|")
                 var = tk.StringVar()
@@ -1935,14 +2384,13 @@ class Playback(tk.Tk):
                         combobox.bind("<<ComboboxSelected>>", lambda event: self.execute_gosub(options["g"]))
                     except:
                         pass
+
             elif command2 == "Checkbox":
                 try:
                     var = tk.BooleanVar()
-
                     def _checkbox_cmd():
                         if "g" in options:
                             self.execute_gosub(options["g"])
-
                     checkbox = ttk.Checkbutton(
                         parent,
                         text=command4,
@@ -1950,17 +2398,16 @@ class Playback(tk.Tk):
                         command=_checkbox_cmd,
                         style="Dark.TCheckbutton"
                     )
-
                     if "v" in options:
                         self.gui_variables[options["v"]] = var
                         self.gui_controls[options["v"]] = checkbox
-
                     checkbox.place(
                         x=safe_int(options["x"]),
                         y=safe_int(options["y"])
                     )
                 except:
                     pass
+
             elif command == "Submit":
                 for name, widget in self.gui_variables.items():
                     self.variables[name] = widget.get()
@@ -2001,22 +2448,18 @@ class Playback(tk.Tk):
             messagebox.showinfo(title if title else "recording.ahk", text)
         except Exception as e:
             raise SyntaxError(f"{action}: {str(e)}")
+
     def _execute_script(self, actions, scan_functions=False):
         """
         Process a list of script lines (supports nested loops via recursion on blocks).
         Uses self.current_line_count to get the line.
         """
-
         saved_line_count = self.current_line_count
-
         actions = self._normalize_inline_else_lines(actions)
-
         # Pre-scan function and label definitions
         if scan_functions:
             self.scan_functions(actions)
-
         self.current_line_count = 0
-
         while self.current_line_count < len(actions):
             raw_line = actions[self.current_line_count]
             line = raw_line.strip()
@@ -2091,6 +2534,7 @@ class Playback(tk.Tk):
                             )
                         except:
                             pass
+
                     matches = sorted(matches)  # deterministic alphabetical order
                     # Save/restore A_Index for nesting support
                     old_a_index = self.variables.get("A_Index")
@@ -2126,7 +2570,8 @@ class Playback(tk.Tk):
                 if self._evaluate_condition(condition):
                     self._execute_script(if_block)
                 else:
-                    self._execute_script(else_block)
+                    if len(else_block) != 0:
+                        self._execute_script(else_block)
                 self.current_line_count = end_index + 1
                 continue
 
@@ -2166,18 +2611,31 @@ class Playback(tk.Tk):
                 self._cmd_sleep(processed_line)
             if processed_line.startswith("MouseMove"):
                 self._cmd_mousemove(processed_line)
+            if processed_line.lower().startswith("winactivate"):
+                self.cmd_winactivate(processed_line)
+            if processed_line.lower().startswith("wingetpos"):
+                self.cmd_wingetpos(processed_line)
+            if processed_line.lower().startswith("winexist"):
+                # Command form is rarely used; mainly the function form is needed.
+                # Still support basic WinExist, Title  (sets ErrorLevel-like behaviour via return)
+                pass
+
+            if processed_line.lower().startswith("setkeydelay"):
+                parts = [x.strip() for x in processed_line.split(",")]
+                self.key_delay = int(parts[1])
             if processed_line.startswith("Reload"):
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             if processed_line.startswith("ExitApp"):
                 self.destroy()
             self.current_line_count += 1
-
         self.current_line_count = saved_line_count
         return
+
     # Final playback
     def build_main_content(self):
         self._execute_script(self.script, True)
         return
+
 if __name__ == "__main__":
     if open_mode == "Editor":
         app = MainGUI()
