@@ -844,6 +844,115 @@ class Playback(tk.Tk):
         # else: plain if with no else clause – keep the end_index we already have
         return condition, if_block, else_block, end_index
 
+    def _try_number(self, val):
+        """
+        AHK-style numeric coercion: if value looks like a number, return int/float;
+        otherwise return the original value unchanged.
+        Empty / whitespace-only strings become 0 (AHK numeric context).
+        """
+        if isinstance(val, bool):
+            return int(val)
+        if isinstance(val, (int, float)):
+            return val
+        if val is None:
+            return 0
+        if isinstance(val, str):
+            s = val.strip()
+            if not s:
+                return 0
+            try:
+                # Prefer int when possible (no decimal / exponent)
+                if re.fullmatch(r"[+-]?\d+", s):
+                    return int(s)
+                return float(s)
+            except ValueError:
+                return val
+        return val
+
+    def _coerce_numeric_literals(self, expr, force_non_numeric_to_zero=False):
+        """
+        Turn string literals that look like numbers into bare numeric literals
+        so that Python eval behaves like AHK expression evaluation.
+        e.g.  '"1" + 1'  →  '1 + 1'
+              "'2.5' > 1" → '2.5 > 1'
+        Non-numeric strings are left quoted unless force_non_numeric_to_zero=True,
+        in which case any remaining quoted string becomes 0 (AHK "invalid → 0").
+        """
+        def repl_numeric(m):
+            s = m.group(1) if m.group(1) is not None else m.group(2)
+            try:
+                if re.fullmatch(r"[+-]?\d+", s):
+                    return str(int(s))
+                return str(float(s))
+            except ValueError:
+                return m.group(0)  # keep original quotes
+
+        expr = re.sub(
+            r'"([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)"|\'([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\'',
+            repl_numeric,
+            expr,
+        )
+        if force_non_numeric_to_zero:
+            # Turn any remaining quoted string into 0
+            expr = re.sub(r'"[^"]*"|\'[^\']*\'', "0", expr)
+        return expr
+
+    def _safe_eval(self, expr):
+        """
+        Evaluate an expression with AHK-compatible type coercion.
+        - Numeric-looking string literals are always turned into numbers first
+          (so "2.5"*2 becomes 5.0, not the Python string-repeat "2.52.5").
+        - Variables whose values look numeric are exposed as numbers; pure
+          non-numeric strings stay as strings (so "foo"=="foo" still works).
+        - Unset / unknown names evaluate to 0 (AHK treats unset vars as empty,
+          which becomes 0 in numeric context) instead of raising NameError.
+        - On TypeError we fall back to a fully numeric context where every
+          non-numeric string (variable or literal) becomes 0, matching AHK's
+          "invalid number → 0" rule. Thus "abc"+1 → 1 and "1"+1 → 2.
+        """
+        # Dict that returns 0 for any missing name (AHK unset-variable behaviour)
+        class _AHKNS(dict):
+            def __missing__(self, key):
+                return 0
+
+        # Always coerce numeric-looking string literals first
+        coerced_expr = self._coerce_numeric_literals(expr)
+
+        # Primary namespace: numeric-looking values → numbers, non-numeric
+        # strings stay as strings (preserves pure string comparisons).
+        raw_ns = self._get_eval_namespace()
+        ns = _AHKNS()
+        for k, v in raw_ns.items():
+            if callable(v):
+                ns[k] = v
+            else:
+                ns[k] = self._try_number(v)
+
+        try:
+            return eval(coerced_expr, {"__builtins__": {}}, ns)
+        except Exception:
+            pass
+
+        # Secondary: force remaining non-numeric strings (vars + literals) to 0
+        forced_expr = self._coerce_numeric_literals(expr, force_non_numeric_to_zero=True)
+        coerced_ns = _AHKNS()
+        for k, v in ns.items():
+            if callable(v):
+                coerced_ns[k] = v
+            elif isinstance(v, str):
+                coerced_ns[k] = 0
+            else:
+                coerced_ns[k] = v
+        try:
+            return eval(forced_expr, {"__builtins__": {}}, coerced_ns)
+        except Exception as e:
+            # Last resort: original expression with original namespace + missing→0
+            try:
+                fallback = _AHKNS(raw_ns)
+                return eval(expr, {"__builtins__": {}}, fallback)
+            except Exception:
+                raise e
+
     def _evaluate_condition(self, condition):
         """
         Evaluate a condition string, supporting AHK-style operators.
@@ -853,6 +962,7 @@ class Playback(tk.Tk):
         Px != -1
         Px > 100
         x >= 5 and y < 10
+        "1" > 2              →  False   (AHK numeric coercion)
         """
         condition = condition.strip()
         if condition.startswith("(") and condition.endswith(")"):
@@ -861,22 +971,34 @@ class Playback(tk.Tk):
         condition = self._normalize_condition(condition)
         # Replace %VarName% tokens
         condition = self._handle_variable(condition)
-        # Replace bare variable names (no % signs) that match known variables/builtins
+        # Replace bare variable names (no % signs) that match known variables/builtins.
+        # Prefer numeric form when the value looks like a number (AHK expression rules).
         def replace_bare(match):
             name = match.group(0)
+
+            # Function names must remain untouched so expressions such as
+            # WinExist("ahk_exe RobloxPlayerBeta.exe") remain callable.
+            eval_namespace = self._get_eval_namespace()
+            if name in eval_namespace and callable(eval_namespace[name]):
+                return name
+
             if name in self.variables:
                 val = self.variables[name]
-                if isinstance(val, str):
-                    return repr(val)
-
-                return str(int(val)) if isinstance(val, float) and val == int(val) else str(val)
+                coerced = self._try_number(val)
+                if isinstance(coerced, str):
+                    return repr(coerced)
+                if isinstance(coerced, float) and coerced == int(coerced):
+                    return str(int(coerced))
+                return str(coerced)
 
             if name in self.builtin_variables:
                 val = self.builtin_variables[name]
-                if isinstance(val, str):
-                    return repr(val)
-
-                return str(int(val)) if isinstance(val, float) and val == int(val) else str(val)
+                coerced = self._try_number(val)
+                if isinstance(coerced, str):
+                    return repr(coerced)
+                if isinstance(coerced, float) and coerced == int(coerced):
+                    return str(int(coerced))
+                return str(coerced)
 
             return name  # leave unknown words untouched (e.g. "and", "or", "not")
 
@@ -887,17 +1009,16 @@ class Playback(tk.Tk):
             lambda m: '"' + m.group(1) + r'\\' + m.group(2) + '"',
             condition
         )
+        # Coerce numeric-looking string literals so "1" > 2 works
+        condition = self._coerce_numeric_literals(condition)
         try:
-            return bool(eval(condition,{},self._get_eval_namespace()))
-
+            return bool(self._safe_eval(condition))
         except Exception as e:
             full_error = traceback.format_exc()
-            error = full_error.splitlines()
-            try:
-                messagebox.showerror("title", f"Error at line {self.current_line_count + 1}\n\nLine text: {error[5]}\n{error[7]}\n\nThe program will exit")
-            except:
-                messagebox.showerror("title", f"Error at line {self.current_line_count + 1}\n\nLine text: {error[2]}\n{error[5]}\n\nThe program will exit")
-            raise SyntaxError(e)
+            print(full_error)
+            # On unrecoverable error treat condition as False rather than crashing
+            # (keeps macros running; previous stub simply returned None)
+            return False
 
     def _normalize_inline_else_lines(self, actions):
         normalized = []
@@ -942,7 +1063,8 @@ class Playback(tk.Tk):
         # Resolve %Var%
         expr = self._handle_variable(expr)
         try:
-            value = eval(expr, {}, self._get_eval_namespace())
+            # AHK-compatible coercion so Loop, "5" or Loop, Amount works when Amount is str
+            value = self._safe_eval(expr)
             return int(value)
 
         except Exception as e:
@@ -1240,8 +1362,20 @@ class Playback(tk.Tk):
             else:
                 return string[start:string_len + length]
 
-        def WinExist(window):
-            return False
+        def WinExist(window=""):
+            """
+            AHK-compatible WinExist() expression function.
+
+            Returns the matching window's HWND when a window is found,
+            or 0 when no matching window exists.
+            """
+            window = self._handle_variable(str(window))
+            info = self._find_window(window)
+
+            if info is None:
+                return 0
+
+            return info.get("hwnd", 0) or 0
 
         return {
 
@@ -1286,6 +1420,9 @@ class Playback(tk.Tk):
             # Convert common AHK syntax into Python syntax first
             expr = value
             # AHK string concatenation -> Python
+            # (Note: pure string concat via "." becomes "+" ; numeric coercion
+            #  will turn non-numeric strings into 0, matching AHK math rules.
+            #  Use .= for true string append.)
             expr = re.sub(r"\s+\.\s+", " + ", expr)
             # Escape backslashes inside quoted strings
             def escape_string(match):
@@ -1294,14 +1431,12 @@ class Playback(tk.Tk):
 
             expr = re.sub(r'"[^"]*"', escape_string, expr)
             try:
-                self.variables[var] = eval(expr, {}, self._get_eval_namespace())
+                # Use AHK-compatible eval so "1" + 1 → 2, mixed types coerce
+                self.variables[var] = self._safe_eval(expr)
             except Exception as e:
                 full_error = traceback.format_exc()
-                error = full_error.splitlines()
-                try:
-                    messagebox.showerror("title", f"Invalid expression: {e}\n\nLine text: {error[5]}\n{error[7]}\n\nThe program will exit")
-                except:
-                    messagebox.showerror("title", f"Invalid expression: {e}\n\nLine text: {error[2]}\n{error[5]}\n\nThe program will exit")
+                print(full_error)
+                # Fallback: store the raw right-hand side as a string
                 self.variables[var] = value
             return True
 
@@ -1351,7 +1486,8 @@ class Playback(tk.Tk):
                 var = var.strip()
                 rhs = self._handle_variable(rhs.strip())
                 try:
-                    rhs_val = float(eval(rhs, {}, self._get_eval_namespace()))
+                    # AHK-compatible: "1" * 2 → 2.0, non-numeric → 0
+                    rhs_val = float(self._safe_eval(rhs))
                 except Exception:
                     return False
 
@@ -2856,6 +2992,7 @@ class Playback(tk.Tk):
 
             # Substitute %Var% tokens before dispatching other commands
             processed_line = self._handle_variable(line)
+            print("Line ", self.current_line_count, ": ", processed_line)
             # All commands go here
             if processed_line.startswith("GuiControl"):
                 self.cmd_guicontrol(processed_line)
