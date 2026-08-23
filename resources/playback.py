@@ -43,12 +43,6 @@ keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
 APP_VERSION = "3.0"
 BETA_VERSION = 3
-try:
-    playback_path = sys.argv[1]
-    open_mode = "Playback"
-except:
-    open_mode = "Editor"
-    folder_path = os.getcwd()
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
@@ -76,7 +70,6 @@ def get_base_path():
         return Path(__file__).parent.resolve(), False
 BASE_PATH, IS_COMPILED = get_base_path()
 IMAGES_PATH = os.path.join(BASE_PATH, "images")
-RESOURCES_PATH = os.path.join(BASE_PATH, "resources")
 # Windows (Transparency and Ctypes WinDLL)
 if sys.platform == "win32":
     windll = ctypes.windll.user32
@@ -462,204 +455,8 @@ def cgimage_to_srgb_numpy(image):
 
     else:
         return image
-
-# Main GUI
-class MainGUI(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.geometry("650x300")
-        self.title("AutoHotKey Dash")
-        # Sidebar
-        self.sidebar = tk.Frame(self, width=350)
-        self.sidebar.pack(side="left", fill="y")
-        # Prevent sidebar from shrinking below 300px
-        self.sidebar.pack_propagate(False)
-        self.sidebar.config(width=250)  # Ensure width is explicitly set
-        # Main content
-        self.content = tk.Frame(self)
-        self.content.pack(side="right", fill="both", expand=True)
-        # Ahk2Py
-        self.ahk_converter = Ahk2Py(self)
-        # Build UI
-        self.build_sidebar()
-        self.build_main_content()
-        self.mainloop()
-    def build_sidebar(self):
-        # Load Icons
-        self.new_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "new_icon.png"))
-        self.compile_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "compile_icon.png"))
-        self.help_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "help_icon.png"))
-        self.window_spy_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "window_spy_icon.png"))
-        self.launch_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "launch_icon.png"))
-        self.record_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "record_icon.png"))
-        self.editor_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "editor_icon.png"))
-        # Configure button style to prevent dark mode auto-coloring
-        tk.Button(
-            self.sidebar,
-            text="Record Script\nGenerate AHK scripts",
-            image=self.record_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-        tk.Button(
-            self.sidebar,
-            text="AHK Visual Editor\nEdit AHK scripts directly",
-            image=self.editor_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-        tk.Button(
-            self.sidebar,
-            text="Compile\nOpen Ahk2Py - convert .ahk to .py",
-            image=self.compile_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0,
-            command=self.ahk_converter.show
-        ).pack(fill="x", padx=0, pady=0)
-        tk.Button(
-            self.sidebar,
-            text="Help Files",
-            image=self.help_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-        tk.Button(
-            self.sidebar,
-            text="Window Spy",
-            image=self.window_spy_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-        tk.Button(
-            self.sidebar,
-            text="Launch Settings\nConfigure how AHK files are opened",
-            image=self.launch_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-    def build_main_content(self):
-        body = tk.Frame(self.content)
-        body.pack(anchor="nw", fill="both", expand=True, padx=0, pady=10)
-        tk.Label(
-            body,
-            text="Welcome!",
-            font=("Segoe UI", 16)
-        ).pack(anchor="w")
-        tk.Label(
-            body,
-            text="This is the Dash. It provides access to tools, settings and help files."
-        ).pack(anchor="w", pady=(5, 0))
-        tk.Label(
-            body,
-            text="To learn how to use AutoHotKey, refer to:"
-        ).pack(anchor="w", pady=(5, 0))
-        tk.Button(
-            body,
-            text="Using the program"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
-        tk.Button(
-            body,
-            text="How to Write Hotkeys"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
-        tk.Button(
-            body,
-            text="How to Send Keystrokes"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
-        tk.Button(
-            body,
-            text="How to Run Programs"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
-        tk.Button(
-            body,
-            text="How to Manage Windows"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
-        tk.Button(
-            body,
-            text="Quick Reference"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
-        tk.Checkbutton(
-            body,
-            text="Show this info next time",
-            anchor="w"
-        ).pack(fill="x", padx=0)
-# AHK to Python converter
-class Ahk2Py:
-    def __init__(self, master):
-        self.master = master
-
-        self.window = tk.Toplevel(self.master)
-        self.window.title("Ahk2Py")
-        self.window.geometry("500x400")
-        self.build_main_content()
-        self.hide()
-
-    def show(self):
-        self.window.deiconify()
-
-    def hide(self):
-        self.window.withdraw()
-
-    def build_main_content(self):
-        main_parameters = tk.LabelFrame(self.window, text="Main Parameters")
-        main_parameters.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
-
-        # FIX: Use pack() or grid() to display the Labels
-        tk.Label(main_parameters, text="Script Location").grid(row=0, column=0, sticky="w")
-        self.script_location = tk.StringVar()
-        tk.Entry(main_parameters, textvariable=self.script_location).grid(row=0, column=1, sticky="w")
-        tk.Label(main_parameters, text="Output Directory").grid(row=1, column=0, sticky="w")
-        self.output_directory = tk.StringVar()
-        tk.Entry(main_parameters, textvariable=self.output_directory).grid(row=1, column=1, sticky="w")
-
-        tk.Button(main_parameters, text="Convert AHK to Python", command=self.ahk_to_py).grid(row=2, column=0, sticky="w")
-
-        self.window.grid_rowconfigure(0, weight=0)
-        self.window.grid_rowconfigure(1, weight=1)
-        self.window.grid_columnconfigure(0, weight=1)
-
-    def ahk_to_py(self):
-        """Bundle playback.py with the selected AHK script."""
-
-        playback_path = os.path.join(RESOURCES_PATH, "playback.py")
-
-        # Load the AHK script.
-        with open(self.script_location.get(), "r", encoding="utf-8") as file:
-            ahk_script = file.read()
-
-        # Load the Solar Automate playback runtime.
-        with open(playback_path, "r", encoding="utf-8") as file:
-            playback_lines = file.readlines()
-
-        # Split playback.py around the selected insertion point.
-        runtime_start = playback_lines[:502]
-        runtime_end = playback_lines[502:]
-
-        # Build the generated Python file.
-        with open(self.output_directory.get(), "w", encoding="utf-8") as outfile:
-            outfile.writelines(runtime_start)
-
-            outfile.write("\n\n")
-            outfile.write(f"script = {ahk_script!r}\n")
-
-            outfile.write("\n\n")
-            outfile.writelines(runtime_end)
-
-        return
-# AHK playback
 class Playback(tk.Tk):
-    def __init__(self, playback_path):
+    def __init__(self):
         super().__init__()
         self.background_color = "white"
         self.foreground_color = "black"
@@ -696,14 +493,15 @@ class Playback(tk.Tk):
             pass
 
         self.geometry("300x300")
-        title = os.path.basename(playback_path)
+        title = os.path.basename("Title")
         self.current_tab = None
         self.tabs = {}
         self.title(title)
         # Cleanly stop the unified hotkey listener when the window is closed
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        with open(playback_path, "r", encoding="utf-8-sig") as f:
-            self.script_text = f.read()
+        self.script_text = """
+
+"""
         self.script = self.script_text.splitlines()
         self.after(0, self.withdraw)
         self.build_main_content()
@@ -3165,10 +2963,4 @@ class Playback(tk.Tk):
         self._execute_script(self.script, True)
         return
 
-if __name__ == "__main__":
-    if open_mode == "Editor":
-        app = MainGUI()
-        app.mainloop()
-    elif open_mode == "Playback":
-        playback = Playback(playback_path)
-print("Program exited with exit code 0")
+playback = Playback()
