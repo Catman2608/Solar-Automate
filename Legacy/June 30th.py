@@ -39,7 +39,7 @@ except:
     open_mode = "Editor"
     folder_path = os.getcwd()
 open_mode = "Playback"
-file_path = "Solar Fishing V4 Lite.ahk"
+file_path = "Solar Fishing V4 Lite.ahk" # DeepFish ALPHA v1.0
 playback_path = os.path.join(folder_path, file_path)
 def open_link(url):
     webbrowser.open(url)
