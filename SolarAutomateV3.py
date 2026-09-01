@@ -1,6 +1,6 @@
 # Imports
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 # Misc
 import webbrowser
 import sys
@@ -42,13 +42,16 @@ elif sys.platform == "linux":
 keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
 APP_VERSION = "3.0"
-BETA_VERSION = 3
+BETA_VERSION = 4
 try:
     playback_path = sys.argv[1]
     open_mode = "Playback"
 except:
     open_mode = "Editor"
     folder_path = os.getcwd()
+# open_mode = "Playback"
+# file_path = "Solar Fishing Lite.ahk"
+# playback_path = os.path.join(folder_path, file_path)
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
@@ -480,29 +483,20 @@ class MainGUI(tk.Tk):
         self.content.pack(side="right", fill="both", expand=True)
         # Ahk2Py
         self.ahk_converter = Ahk2Py(self)
+        self.ahk_editor = AhkEditor(self)
         # Build UI
         self.build_sidebar()
         self.build_main_content()
         self.mainloop()
     def build_sidebar(self):
         # Load Icons
-        self.new_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "new_icon.png"))
+        self.editor_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "editor_icon.png"))
         self.compile_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "compile_icon.png"))
         self.help_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "help_icon.png"))
         self.window_spy_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "window_spy_icon.png"))
         self.launch_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "launch_icon.png"))
         self.record_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "record_icon.png"))
-        self.editor_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "editor_icon.png"))
         # Configure button style to prevent dark mode auto-coloring
-        tk.Button(
-            self.sidebar,
-            text="Record Script\nGenerate AHK scripts",
-            image=self.record_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
         tk.Button(
             self.sidebar,
             text="AHK Visual Editor\nEdit AHK scripts directly",
@@ -510,7 +504,8 @@ class MainGUI(tk.Tk):
             compound="left",
             anchor="w",
             justify="left",
-            padx=0
+            padx=0,
+            command=self.ahk_editor.show
         ).pack(fill="x", padx=0, pady=0)
         tk.Button(
             self.sidebar,
@@ -535,15 +530,6 @@ class MainGUI(tk.Tk):
             self.sidebar,
             text="Window Spy",
             image=self.window_spy_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-        tk.Button(
-            self.sidebar,
-            text="Launch Settings\nConfigure how AHK files are opened",
-            image=self.launch_icon,
             compound="left",
             anchor="w",
             justify="left",
@@ -594,6 +580,632 @@ class MainGUI(tk.Tk):
             text="Show this info next time",
             anchor="w"
         ).pack(fill="x", padx=0)
+# AHK Editor
+class AhkEditor:
+    # Recorder tuning
+    MOVE_PIXEL_THRESHOLD = 8      # ignore jitter smaller than this
+    MOVE_MIN_INTERVAL = 0.05      # seconds between MouseMove samples
+    MIN_SLEEP_MS = 20             # do not emit Sleep for tiny gaps
+    MAX_SLEEP_MS = 60000
+    CLICK_TAP_MS = 220            # collapse Down+Up into a single Click
+    RECORD_ARM_DELAY = 0.25       # skip the Start Recording click
+    def __init__(self, master):
+        self.master = master
+
+        self.window = tk.Toplevel(self.master)
+        self.window.title("AutoHotKey Script Editor")
+        self.window.geometry("800x600")
+        self.window.protocol("WM_DELETE_WINDOW", self.hide)
+
+        # Current editor file
+        self.file_path = None
+
+        # Recorder state
+        self.is_recording = False
+        self.recorded_actions = []
+        self.recording_lock = threading.Lock()
+
+        self.recording_start_time = 0.0
+        self.last_action_time = 0.0
+
+        # Mouse recording state
+        self.last_mouse_position = None
+        self.last_mouse_move_time = 0.0
+
+        # Keyboard recording state
+        self.pressed_keys = set()
+
+        # Ignore the mouse click used to press Start Recording.
+        self.record_arm_time = 0.0
+
+        self.build_main_content()
+
+        # Start global keyboard listener
+        self.keyboard_listener = None
+        try:
+            self.keyboard_listener = keyboard.Listener(
+                on_press=self.on_press,
+                on_release=self.on_release
+            )
+            self.keyboard_listener.daemon = True
+            self.keyboard_listener.start()
+        except Exception as e:
+            print(f"Keyboard listener error: {e}")
+
+        # Start global mouse listener
+        self.mouse_listener = None
+        try:
+            self.mouse_listener = mouse.Listener(
+                on_move=self.on_move,
+                on_click=self.on_click,
+                on_scroll=self.on_scroll
+            )
+            self.mouse_listener.daemon = True
+            self.mouse_listener.start()
+        except Exception as e:
+            print(f"Mouse listener error: {e}")
+
+        self.build_menu()
+        self.hide()
+
+    def show(self):
+        self.window.deiconify()
+
+    def hide(self):
+        if getattr(self, "is_recording", False):
+            self.stop_recording()
+        self.window.withdraw()
+
+    def build_main_content(self):
+        # Configure grid weights
+        self.window.grid_rowconfigure(0, weight=0)  # Top bar - fixed height
+        self.window.grid_rowconfigure(1, weight=1)  # Editor - takes remaining space
+        self.window.grid_columnconfigure(0, weight=1)
+
+        # Top Bar with content
+        self.top_bar = tk.LabelFrame(self.window, text="Top Bar", height=80)
+        self.top_bar.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
+        self.top_bar.grid_propagate(False)
+        
+        # Configure grid for self.top_bar
+        self.top_bar.grid_columnconfigure(0, weight=1)
+        self.top_bar.grid_columnconfigure(1, weight=0)
+
+        commands = ["Send", "Click", "Sleep", "MouseMove", "PixelSearch", "PixelGetColor", "MouseGetPos"]
+        self.current_command = ttk.Combobox(self.top_bar, values=commands)  # Specify master as self.top_bar
+        self.current_command.grid(row=0, column=0, sticky="ew")  # Only east-west
+
+        button = tk.Button(self.top_bar, text="Add", command=self.add_content)  # Specify master as self.top_bar
+        button.grid(row=0, column=1, sticky="ew")  # Only east-west
+
+        self.recording_button = tk.Button(self.top_bar, text="Start Recording", command=self.start_recording)  # Specify master as self.top_bar
+        self.recording_button.grid(row=0, column=2, sticky="ew")  # Only east-west
+
+        # Editor
+        editor = tk.LabelFrame(self.window, text="Editor")
+        editor.grid(row=1, column=0, sticky="nsew")
+        
+        # Add a Text widget as the editor
+        self.text_editor = tk.Text(editor, wrap=tk.WORD)
+        self.text_editor.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+    def build_menu(self):
+        menubar = tk.Menu(self.window)
+
+        # File
+        file_menu = tk.Menu(menubar, tearoff=False)
+        file_menu.add_command(label="New", command=self.new_file)
+        file_menu.add_command(label="Open", command=self.open_file)
+        file_menu.add_command(label="Save", command=self.save_file)
+        menubar.add_cascade(label="File", menu=file_menu)
+
+        # Edit
+        edit_menu = tk.Menu(menubar, tearoff=False)
+        edit_menu.add_command(label="Undo", command=self.text_editor.edit_undo)
+        edit_menu.add_command(label="Redo", command=self.text_editor.edit_redo)
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Cut", command=lambda: self.text_editor.event_generate("<<Cut>>"))
+        edit_menu.add_command(label="Copy", command=lambda: self.text_editor.event_generate("<<Copy>>"))
+        edit_menu.add_command(label="Paste", command=lambda: self.text_editor.event_generate("<<Paste>>"))
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Find", command=self.find_text)
+        edit_menu.add_command(label="Find and Replace", command=self.find_and_replace)
+        menubar.add_cascade(label="Edit", menu=edit_menu)
+
+        # View
+        view_menu = tk.Menu(menubar, tearoff=False)
+        view_menu.add_command(label="Zoom In", command=self.zoom_in)
+        view_menu.add_command(label="Zoom Out", command=self.zoom_out)
+        view_menu.add_command(label="Reset Zoom", command=self.reset_zoom)
+        menubar.add_cascade(label="View", menu=view_menu)
+
+        self.window.config(menu=menubar)
+
+    def record_action(self, action_text, timestamp=None):
+        """
+        Add an action to the recording with the delay since the previous action.
+
+        This method is called by pynput listener threads, so it must not touch
+        Tkinter widgets directly.
+        """
+        if not self.is_recording or not action_text:
+            return
+
+        if timestamp is None:
+            timestamp = time.monotonic()
+
+        with self.recording_lock:
+            if not self.is_recording:
+                return
+
+            # First action starts from the recording start time.
+            if self.last_action_time <= 0:
+                self.last_action_time = self.recording_start_time
+
+            delay_ms = int(
+                max(0.0, timestamp - self.last_action_time) * 1000
+            )
+
+            self.last_action_time = timestamp
+
+            if delay_ms >= self.MIN_SLEEP_MS:
+                delay_ms = min(delay_ms, self.MAX_SLEEP_MS)
+                self.recorded_actions.append(f"Sleep, {delay_ms}")
+
+            self.recorded_actions.append(action_text)
+
+    def start_recording(self):
+        """
+        Start recording keyboard and mouse events.
+
+        The listeners run independently from Tkinter, so this method does not
+        contain a blocking loop.
+        """
+        if self.is_recording:
+            return
+
+        print("Macro Status: Recording...")
+
+        with self.recording_lock:
+            self.recorded_actions.clear()
+            self.pressed_keys.clear()
+
+            self.recording_start_time = time.monotonic()
+            self.last_action_time = self.recording_start_time
+
+            self.last_mouse_position = None
+            self.last_mouse_move_time = 0.0
+
+            # Ignore the click that pressed the recording button.
+            self.record_arm_time = (
+                self.recording_start_time + self.RECORD_ARM_DELAY
+            )
+
+            self.is_recording = True
+
+        self.recording_button.config(
+            text="Stop Recording",
+            command=self.stop_recording
+        )
+
+
+    def stop_recording(self):
+        """
+        Stop recording and insert the recorded actions into the editor.
+        """
+        if not self.is_recording:
+            return
+
+        print("Macro Status: Recording stopped.")
+
+        with self.recording_lock:
+            self.is_recording = False
+
+            # Release any keys that were still held when recording stopped.
+            for key_name in list(self.pressed_keys):
+                self.recorded_actions.append(
+                    f"Send, {{{key_name} up}}"
+                )
+
+            self.pressed_keys.clear()
+
+            # Copy the result so the listener threads cannot modify the list
+            # while we are inserting it into the editor.
+            actions = list(self.recorded_actions)
+            self.recorded_actions.clear()
+
+        self.recording_button.config(
+            text="Start Recording",
+            command=self.start_recording
+        )
+
+        if actions:
+            # Tkinter operations must happen on the Tkinter thread.
+            self.window.after(
+                0,
+                lambda: self._insert_recorded_actions(actions)
+            )
+
+    def _insert_recorded_actions(self, actions):
+        """Insert a completed recording into the Text widget."""
+        if not actions:
+            return
+
+        current_text = self.text_editor.get("1.0", "end-1c")
+
+        if current_text.strip():
+            self.text_editor.insert("end-1c", "\n")
+
+        self.text_editor.insert("end-1c", "\n".join(actions))
+        self.text_editor.see("end")
+        self.text_editor.focus_set()
+
+    def _key_to_ahk(self, key):
+        """Convert a pynput key into an AHK Send key name."""
+        try:
+            if hasattr(key, "char") and key.char is not None:
+                char = key.char
+
+                if char == " ":
+                    return "Space"
+
+                if char in {"\r", "\n"}:
+                    return "Enter"
+
+                return char
+
+            name = str(key).replace("Key.", "")
+
+            aliases = {
+                "space": "Space",
+                "enter": "Enter",
+                "return": "Enter",
+                "tab": "Tab",
+                "esc": "Escape",
+                "escape": "Escape",
+                "backspace": "Backspace",
+                "delete": "Delete",
+
+                "shift": "Shift",
+                "shift_l": "LShift",
+                "shift_r": "RShift",
+
+                "ctrl": "Ctrl",
+                "ctrl_l": "LCtrl",
+                "ctrl_r": "RCtrl",
+                "control": "Ctrl",
+
+                "alt": "Alt",
+                "alt_l": "LAlt",
+                "alt_r": "RAlt",
+
+                "cmd": "LWin",
+                "cmd_l": "LWin",
+                "cmd_r": "RWin",
+
+                "up": "Up",
+                "down": "Down",
+                "left": "Left",
+                "right": "Right",
+
+                "home": "Home",
+                "end": "End",
+                "insert": "Insert",
+                "page_up": "PgUp",
+                "page_down": "PgDn",
+
+                "caps_lock": "CapsLock",
+                "num_lock": "NumLock",
+                "scroll_lock": "ScrollLock",
+            }
+
+            if name.lower() in aliases:
+                return aliases[name.lower()]
+
+            # F1-F24
+            if name.lower().startswith("f") and name[1:].isdigit():
+                return name.upper()
+
+            return name
+
+        except Exception:
+            return None
+
+    def on_press(self, key):
+        """Record keyboard press events."""
+        if not self.is_recording:
+            return
+
+        now = time.monotonic()
+
+        # Don't record anything during the arming period.
+        if now < self.record_arm_time:
+            return
+
+        key_name = self._key_to_ahk(key)
+
+        if not key_name:
+            return
+
+        with self.recording_lock:
+            # Prevent repeated key-down events from key auto-repeat.
+            if key_name in self.pressed_keys:
+                return
+
+            self.pressed_keys.add(key_name)
+
+        # Modifier keys and other held keys need a down event.
+        self.record_action(
+            f"Send, {{{key_name} down}}",
+            timestamp=now
+        )
+
+
+    def on_release(self, key):
+        """Record keyboard release events."""
+        if not self.is_recording:
+            return
+
+        now = time.monotonic()
+
+        if now < self.record_arm_time:
+            return
+
+        key_name = self._key_to_ahk(key)
+
+        if not key_name:
+            return
+
+        with self.recording_lock:
+            if key_name not in self.pressed_keys:
+                return
+
+            self.pressed_keys.remove(key_name)
+
+        self.record_action(
+            f"Send, {{{key_name} up}}",
+            timestamp=now
+        )
+
+
+    def on_move(self, x, y):
+        """Record significant mouse movement."""
+        if not self.is_recording:
+            return
+
+        now = time.monotonic()
+
+        if now < self.record_arm_time:
+            return
+
+        with self.recording_lock:
+            if self.last_mouse_position is not None:
+                last_x, last_y = self.last_mouse_position
+
+                distance = math.hypot(
+                    x - last_x,
+                    y - last_y
+                )
+
+                # Ignore tiny mouse jitter.
+                if distance < self.MOVE_PIXEL_THRESHOLD:
+                    return
+
+            # Limit mouse-move recording frequency.
+            if (
+                self.last_mouse_move_time > 0
+                and now - self.last_mouse_move_time < self.MOVE_MIN_INTERVAL
+            ):
+                self.last_mouse_position = (x, y)
+                return
+
+            self.last_mouse_position = (x, y)
+            self.last_mouse_move_time = now
+
+        self.record_action(
+            f"MouseMove, {round(x)}, {round(y)}",
+            timestamp=now
+        )
+
+
+    def on_click(self, x, y, button, pressed):
+        """Record mouse button presses and releases."""
+        if not self.is_recording:
+            return
+
+        now = time.monotonic()
+
+        if now < self.record_arm_time:
+            return
+
+        button_name = str(button).replace("Button.", "").lower()
+
+        button_map = {
+            "left": "Left",
+            "right": "Right",
+            "middle": "Middle",
+        }
+
+        ahk_button = button_map.get(button_name)
+
+        if ahk_button is None:
+            return
+
+        action = "Down" if pressed else "Up"
+
+        self.record_action(
+            f"Click, {round(x)}, {round(y)}, {action} {ahk_button}",
+            timestamp=now
+        )
+
+
+    def on_scroll(self, x, y, dx, dy):
+        """Record mouse-wheel events."""
+        if not self.is_recording:
+            return
+
+        now = time.monotonic()
+
+        if now < self.record_arm_time:
+            return
+
+        # AHK-compatible wheel commands.
+        if dy > 0:
+            action = "Send, {WheelUp}"
+        elif dy < 0:
+            action = "Send, {WheelDown}"
+        else:
+            return
+
+        self.record_action(
+            action,
+            timestamp=now
+        )
+
+    def new_file(self):
+        """Clear the editor and start a new unsaved AHK script."""
+        if self.is_recording:
+            self.stop_recording()
+
+        self.text_editor.delete("1.0", tk.END)
+
+        self.file_path = None
+        self.window.title("AutoHotKey Script Editor")
+
+
+    def open_file(self):
+        """Open an AHK script into the editor."""
+        if self.is_recording:
+            self.stop_recording()
+
+        file_path = filedialog.askopenfilename(
+            parent=self.window,
+            title="Open AutoHotKey Script",
+            filetypes=[
+                ("AutoHotKey Scripts", "*.ahk"),
+                ("Text Files", "*.txt"),
+                ("All Files", "*.*")
+            ]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "r", encoding="utf-8-sig") as file:
+                content = file.read()
+
+        except UnicodeDecodeError:
+            try:
+                with open(file_path, "r", encoding="cp1252") as file:
+                    content = file.read()
+            except Exception as e:
+                messagebox.showerror(
+                    "Open File",
+                    f"Could not open the file:\n\n{e}",
+                    parent=self.window
+                )
+                return
+
+        except Exception as e:
+            messagebox.showerror(
+                "Open File",
+                f"Could not open the file:\n\n{e}",
+                parent=self.window
+            )
+            return
+
+        self.text_editor.delete("1.0", tk.END)
+        self.text_editor.insert("1.0", content)
+
+        self.file_path = file_path
+        self.window.title(
+            f"AutoHotKey Script Editor - {os.path.basename(file_path)}"
+        )
+
+        self.text_editor.focus_set()
+
+
+    def save_file(self):
+        """Save the current editor contents to an AHK file."""
+        if self.is_recording:
+            self.stop_recording()
+
+        file_path = self.file_path
+
+        # If this is a new/unsaved document, ask where to save it.
+        if not file_path:
+            file_path = filedialog.asksaveasfilename(
+                parent=self.window,
+                title="Save AutoHotKey Script",
+                defaultextension=".ahk",
+                filetypes=[
+                    ("AutoHotKey Scripts", "*.ahk"),
+                    ("Text Files", "*.txt"),
+                    ("All Files", "*.*")
+                ]
+            )
+
+            if not file_path:
+                return
+
+        try:
+            content = self.text_editor.get("1.0", "end-1c")
+
+            with open(file_path, "w", encoding="utf-8") as file:
+                file.write(content)
+
+            self.file_path = file_path
+
+            self.window.title(
+                f"AutoHotKey Script Editor - {os.path.basename(file_path)}"
+            )
+
+        except Exception as e:
+            messagebox.showerror(
+                "Save File",
+                f"Could not save the file:\n\n{e}",
+                parent=self.window
+            )
+
+
+    def find_text(self):
+        pass
+
+
+    def find_and_replace(self):
+        pass
+
+
+    def zoom_in(self):
+        pass
+
+
+    def zoom_out(self):
+        pass
+
+
+    def reset_zoom(self):
+        pass
+        
+    def add_content(self, selected2=0):
+        if selected2 == 0:
+            selected = self.current_command.get()
+        else:
+            selected = selected2
+
+        if not selected:
+            return
+
+        last_line = self.text_editor.get("end-1c linestart", "end-1c")
+
+        if last_line.strip():
+            self.text_editor.insert(tk.END, "\n" + selected)
+        else:
+            self.text_editor.insert("end-1c", selected)
+
+        self.text_editor.focus_set()
+
 # AHK to Python converter
 class Ahk2Py:
     def __init__(self, master):
@@ -602,6 +1214,7 @@ class Ahk2Py:
         self.window = tk.Toplevel(self.master)
         self.window.title("Ahk2Py")
         self.window.geometry("500x400")
+        self.window.protocol("WM_DELETE_WINDOW", self.hide)
         self.build_main_content()
         self.hide()
 
@@ -2240,6 +2853,39 @@ class Playback(tk.Tk):
             self.variables["ErrorLevel"] = 1
         return
 
+    def _cmd_pixelgetcolor(self, action):
+        # AHK: PixelGetColor, OutputVar, X, Y [, RGB]
+        try:
+            _, args = action.split(",", 1)
+            parts = [p.strip() for p in args.split(",")]
+            out_var = parts[0]
+            x = int(float(parts[1]))
+            y = int(float(parts[2]))
+            # --- Grab frame: use capture thread if running, else one-shot ---
+            if self.capture_running and hasattr(self, "_cap_lock"):
+                if hasattr(self, "_cap_event"):
+                    self._cap_event.wait(timeout=0.2)
+                with self._cap_lock:
+                    frame = self._cap_frame.copy() if self._cap_frame is not None else None
+            else:
+                thread_local = threading.local()
+                frame = self._grab_screen_full(thread_local)
+            if frame is None:
+                self.variables[out_var] = 0
+                self.variables["ErrorLevel"] = 1
+                return
+            h, w = frame.shape[:2]
+            x = max(0, min(x, w - 1))
+            y = max(0, min(y, h - 1))
+            # frame is BGR (from mss): index [y, x] -> (B, G, R)
+            b, g, r = int(frame[y, x, 0]), int(frame[y, x, 1]), int(frame[y, x, 2])
+            # AHK PixelGetColor returns 0xBBGGRR
+            color_val = (b << 16) | (g << 8) | r
+            self.variables[out_var] = f"0x{color_val:06X}"
+            self.variables["ErrorLevel"] = 0
+        except Exception as e:
+            self.raise_error(action, str(e))
+
     def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
         """
         Send a keyboard event.
@@ -2492,6 +3138,20 @@ class Playback(tk.Tk):
         _, args = action.split(",", 1)
         x, y = [int(v.strip()) for v in args.split(",")]
         mouse_controller.position = (x, y)
+    def _cmd_mousegetpos(self, action):
+        # AHK: MouseGetPos [, OutX, OutY]
+        try:
+            parts = []
+            if "," in action:
+                _, args = action.split(",", 1)
+                parts = [p.strip() for p in args.split(",")]
+            out_x = parts[0] if len(parts) > 0 else "MouseX"
+            out_y = parts[1] if len(parts) > 1 else "MouseY"
+            pos = mouse_controller.position
+            self.variables[out_x] = int(pos[0])
+            self.variables[out_y] = int(pos[1])
+        except Exception as e:
+            self.raise_error(action, str(e))
     def cmd_ini(self, action):
         parts = [x.strip() for x in action.split(",")]
         command = parts[0].lower()
@@ -2996,6 +3656,11 @@ class Playback(tk.Tk):
                 self.current_line_count += 1
                 continue
 
+            # DllCall is not implemented
+            if "DllCall" in line.lower():
+                self.current_line_count += 1
+                continue
+
             # Return breaks the (current) execution scope
             if line.lower() == "return":
                 break
@@ -3132,6 +3797,8 @@ class Playback(tk.Tk):
                 self.cmd_hotkey(processed_line)
             if processed_line.startswith("PixelSearch"):
                 self.cmd_pixelsearch(processed_line)
+            if processed_line.startswith("PixelGetColor"):
+                self._cmd_pixelgetcolor(processed_line)
             if processed_line.startswith("Send"):
                 self._cmd_send(processed_line)
             if processed_line.startswith("Click"):
@@ -3140,6 +3807,8 @@ class Playback(tk.Tk):
                 self._cmd_sleep(processed_line)
             if processed_line.startswith("MouseMove"):
                 self._cmd_mousemove(processed_line)
+            if processed_line.startswith("MouseGetPos"):
+                self._cmd_mousegetpos(processed_line)
             if processed_line.lower().startswith("winactivate"):
                 self.cmd_winactivate(processed_line)
             if processed_line.lower().startswith("wingetpos"):
