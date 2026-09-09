@@ -37,21 +37,22 @@ elif sys.platform == "darwin":
 elif sys.platform == "linux":
     from Xlib import X, XK, display as Xdisplay
     from Xlib.ext import xtest
+    from ctypes.util import find_library
 # Define platform-specific constants
 # All platforms
 keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
-APP_VERSION = "3.0"
-BETA_VERSION = 4
+APP_VERSION = 3.0
+BETA_VERSION = 0
 try:
     playback_path = sys.argv[1]
     open_mode = "Playback"
 except:
     open_mode = "Editor"
     folder_path = os.getcwd()
-# open_mode = "Playback"
-# file_path = "Solar Fishing Lite.ahk"
-# playback_path = os.path.join(folder_path, file_path)
+open_mode = "Playback"
+file_path = "Solar Fishing Lite.ahk"
+playback_path = os.path.join(folder_path, file_path)
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
@@ -90,6 +91,7 @@ if sys.platform == "win32":
     MOUSEEVENTF_RIGHTUP = 0x0010
     MOUSEEVENTF_MIDDLEDOWN = 0x0020
     MOUSEEVENTF_MIDDLEUP = 0x0040
+    VK_LBUTTON = 0x01
     # Ctypes GUI constants
     SW_MAXIMIZE = 3
     user32 = ctypes.windll.user32
@@ -236,6 +238,7 @@ if sys.platform == "win32":
 # macOS (Keyboard, scale factor, mouse button)
 elif sys.platform == "darwin":
     _scale_cache = None
+    LEFT_BUTTON = 0
     MAC_KEY_MAP = {
         "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
         "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20,
@@ -413,6 +416,10 @@ elif sys.platform.startswith("linux"):
             time.sleep(delay)
             xtest.fake_input(d, X.KeyRelease, keycode)
             d.sync()
+    try:
+        X11 = ctypes.cdll.LoadLibrary(find_library("X11"))
+    except Exception:
+        X11 = None
 # Screen dimensions via mss — use monitor[1] (primary) not monitor[0] (virtual combined).
 # On Windows with DPI scaling, pywebview's x/y/width/height use physical pixels,
 # so we must query the raw physical resolution, not the scaled logical resolution.
@@ -1280,6 +1287,8 @@ class Playback(tk.Tk):
         self.max_y = 0
         self.variables = {}
         self.gui_variables = {}
+        self.gui_control_placements = {}
+        self.gui_images = {}
         self.functions = {}
         # Unified hotkey registry: normalized_key -> label_name (str) or body lines (list)
         # Presence in the dict means the hotkey is enabled. Hotkey, ..., Off deletes the entry.
@@ -1710,33 +1719,41 @@ class Playback(tk.Tk):
         def replace_bare(match):
             name = match.group(0)
 
-            # Function names must remain untouched so expressions such as
-            # WinExist("ahk_exe RobloxPlayerBeta.exe") remain callable.
+            # Function names must NEVER be replaced by variable values.
+            # AHK function names are case-insensitive.
             eval_namespace = self._get_eval_namespace()
-            if name in eval_namespace and callable(eval_namespace[name]):
-                return name
 
+            for func_name, func in eval_namespace.items():
+                if func_name.lower() == name.lower() and callable(func):
+                    return func_name
+
+            # Built-in constants / variables
             if name in self.variables:
                 val = self.variables[name]
                 coerced = self._try_number(val)
+
                 if isinstance(coerced, str):
                     return repr(coerced)
+
                 if isinstance(coerced, float) and coerced == int(coerced):
                     return str(int(coerced))
+
                 return str(coerced)
 
             if name in self.builtin_variables:
                 val = self.builtin_variables[name]
                 coerced = self._try_number(val)
+
                 if isinstance(coerced, str):
                     return repr(coerced)
+
                 if isinstance(coerced, float) and coerced == int(coerced):
                     return str(int(coerced))
+
                 return str(coerced)
 
-            return name  # leave unknown words untouched (e.g. "and", "or", "not")
-
-        condition = re.sub(r'\b[A-Za-z_]\w*\b', replace_bare, condition)
+            # Python/boolean/logical keywords remain untouched.
+            return name
         # Convert AHK backslash paths to Python-safe strings
         condition = re.sub(
             r'"([^"]*?)\\([^"]*?)"',
@@ -2111,11 +2128,82 @@ class Playback(tk.Tk):
 
             return info.get("hwnd", 0) or 0
 
-        return {
+        def GetKeyState(key, mode=""):
+            """
+            Basic AHK-compatible GetKeyState().
 
+            Returns True when the requested key/button is currently pressed.
+            For physical-state mode ("P"), use the current physical state.
+            """
+            key = str(key).strip().lower()
+
+            try:
+                if key in ("lbutton", "left"):
+                    if sys.platform == "win32":
+                        return bool(
+                            ctypes.windll.user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000
+                        )
+
+                    elif sys.platform == "darwin":
+                        return bool(
+                            Quartz.CGEventSourceButtonState(
+                                Quartz.kCGEventSourceStateCombinedSessionState,
+                                LEFT_BUTTON
+                            )
+                        )
+
+                    elif sys.platform.startswith("linux"):
+                        if X11 is None:
+                            return False
+
+                        # XQueryPointer returns the current mouse-button mask.
+                        class Display(ctypes.Structure):
+                            pass
+
+                        X11.XOpenDisplay.restype = ctypes.POINTER(Display)
+                        X11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+
+                        display = X11.XOpenDisplay(None)
+
+                        if not display:
+                            return False
+
+                        root = ctypes.c_ulong()
+                        child = ctypes.c_ulong()
+                        root_x = ctypes.c_int()
+                        root_y = ctypes.c_int()
+                        win_x = ctypes.c_int()
+                        win_y = ctypes.c_int()
+                        mask = ctypes.c_uint()
+
+                        X11.XQueryPointer(
+                            display,
+                            ctypes.c_ulong(0),
+                            ctypes.byref(root),
+                            ctypes.byref(child),
+                            ctypes.byref(root_x),
+                            ctypes.byref(root_y),
+                            ctypes.byref(win_x),
+                            ctypes.byref(win_y),
+                            ctypes.byref(mask),
+                        )
+
+                        # Button1Mask = 0x100
+                        return bool(mask.value & 0x100)
+
+            except Exception:
+                pass
+
+            return False
+
+        # Build the namespace so user variables cannot overwrite
+        # built-in AHK functions such as Round(), InStr(), WinExist(), etc.
+        namespace = {
             **self.builtin_variables,
             **self.variables,
             "A_TickCount": int(time.monotonic() * 1000),
+
+            # AHK functions
             "RTrim": RTrim,
             "InStr": InStr,
             "SubStr": SubStr,
@@ -2132,10 +2220,18 @@ class Playback(tk.Tk):
             "Trim": lambda s: str(s).strip(),
             "Chr": lambda n: chr(int(n)),
             "Ord": lambda c: ord(str(c)[0]) if c else 0,
-            "IsInteger": lambda v: isinstance(v, int) or (isinstance(v, str) and v.isdigit()),
-            "IsNumber": lambda v: str(v).replace(".", "", 1).isdigit(),
+            "IsInteger": lambda v: (
+                isinstance(v, int)
+                or (isinstance(v, str) and v.isdigit())
+            ),
+            "IsNumber": lambda v: (
+                str(v).replace(".", "", 1).isdigit()
+            ),
             "WinExist": WinExist,
+            "GetKeyState": GetKeyState,
         }
+
+        return namespace
     def _handle_assignment(self, action):
         """
         Split the value and the target variables, then update the value based on the target variable.
@@ -2282,7 +2378,7 @@ class Playback(tk.Tk):
         Convert AHK color (0xBBGGRR) or standard hex (#RRGGBB) to RGB tuple.
         """
         if not color:
-            return None
+            return None, None, None
 
         color = color.strip().lower()
         try:
@@ -2292,7 +2388,7 @@ class Playback(tk.Tk):
                 b = (value >> 16) & 0xFF
                 g = (value >> 8) & 0xFF
                 r = value & 0xFF
-                return (r, g, b)  # ✅ RGB
+                return r, g, b  # ✅ RGB
 
             # --- Standard hex: #RRGGBB ---
             if color.startswith("#"):
@@ -2300,29 +2396,31 @@ class Playback(tk.Tk):
                 r = int(color[0:2], 16)
                 g = int(color[2:4], 16)
                 b = int(color[4:6], 16)
-                return (r, g, b)
+                return r, g, b
 
         except Exception:
-            return None
+            return None, None, None
 
-        return None
+        return None, None, None
 
     def _find_first_pixel(self, frame, hex, tolerance=8):
         if frame is None or frame.size == 0:
             return None, None
 
-        tolerance = int(np.clip(tolerance, 0, 255))
-        b, g, r = self._hex_to_bgr(hex)
-        target = np.array([b, g, r], dtype=np.int32)
-        frame_i = frame.astype(np.int32)
-        diff = frame_i - target
-        mask = np.sqrt(np.sum(diff ** 2, axis=-1)) <= tolerance
-        coords = np.argwhere(mask)
-        if coords.size > 0:
-            y, x = coords[0]
-            return int(x), int(y)
-
-        return None, None
+        try:
+            tolerance = int(np.clip(tolerance, 0, 255))
+            b, g, r = self._parse_ahk_color(hex)
+            target = np.array([b, g, r], dtype=np.int32)
+            frame_i = frame.astype(np.int32)
+            diff = frame_i - target
+            mask = np.sqrt(np.sum(diff ** 2, axis=-1)) <= tolerance
+            coords = np.argwhere(mask)
+            if coords.size > 0:
+                y, x = coords[0]
+                return int(x), int(y)
+            return None, None
+        except:
+            return None, None
 
     # ── Window commands (WinExist / WinActivate / WinGetPos) ──────────────────
     def _parse_window_criteria(self, criteria):
@@ -2743,35 +2841,73 @@ class Playback(tk.Tk):
             self.variables[out_drive] = drive
     def cmd_guicontrol(self, action):
         parts = [x.strip() for x in action.split(",", 3)]
+
         # GuiControl, SubCommand, Control, Value
         while len(parts) < 4:
             parts.append("")
+
         _, subcommand, control, value = parts
+
         widget = self.gui_controls.get(control)
+
         if widget is None:
             return
 
         subcommand = subcommand.lower()
+
         if subcommand == "":
-            # Set text/value
+            # Set text/value (or image file for Picture/Image controls)
             if isinstance(widget, tk.Entry):
                 widget.delete(0, tk.END)
                 widget.insert(0, value)
+
             elif isinstance(widget, ttk.Combobox):
                 widget.set(value)
+
+            elif getattr(widget, "_is_gui_image", False):
+                placement = self.gui_control_placements.get(control, {})
+                photo = self._load_gui_image(
+                    value,
+                    placement.get("width", 0),
+                    placement.get("height", 0),
+                )
+                if photo is not None:
+                    widget.config(image=photo, text="")
+                    widget.image = photo
+                    self.gui_images[control] = photo
+
             elif isinstance(widget, tk.Label):
                 widget.config(text=value)
+
             elif isinstance(widget, tk.Button):
                 widget.config(text=value)
+
         elif subcommand == "enable":
             widget.configure(state="normal")
+
         elif subcommand == "disable":
             widget.configure(state="disabled")
+
         elif subcommand == "hide":
             widget.place_forget()
+
         elif subcommand == "show":
-            # you'll need to remember its original x/y
-            pass
+            placement = self.gui_control_placements.get(control)
+
+            if placement is None:
+                return
+
+            place_kwargs = {
+                "x": placement["x"],
+                "y": placement["y"],
+            }
+            # Only apply size when the control was created with explicit w/h.
+            # Text/Link/Checkbox often omit them; forcing 0 would collapse the widget.
+            if placement.get("width"):
+                place_kwargs["width"] = placement["width"]
+            if placement.get("height"):
+                place_kwargs["height"] = placement["height"]
+            widget.place(**place_kwargs)
 
     def cmd_hotkey(self, action):
         """
@@ -3354,6 +3490,65 @@ class Playback(tk.Tk):
             self.variables[out_w] = info["width"]
         if out_h:
             self.variables[out_h] = info["height"]
+    def _register_gui_widget(self, widget, options, width=None, height=None):
+        """Store widget + place() geometry so GuiControl Hide/Show can restore it."""
+        def _si(value, default=0):
+            try:
+                return int(float(value))
+            except (ValueError, TypeError):
+                return default
+
+        x = _si(options.get("x", 0))
+        y = _si(options.get("y", 0))
+        w = width if width is not None else _si(options.get("w", 0))
+        h = height if height is not None else _si(options.get("h", 0))
+        if "v" in options:
+            name = options["v"]
+            self.gui_controls[name] = widget
+            self.gui_control_placements[name] = {
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+            }
+        return x, y, w, h
+
+    def _load_gui_image(self, filename, width=0, height=0):
+        """Load an image for Gui, Add, Image / Picture. Returns a PhotoImage or None."""
+        if not filename:
+            return None
+        path = self._resolve_value(str(filename)).strip().strip('"').strip("'")
+        if not path:
+            return None
+        candidates = [path]
+        if not os.path.isabs(path):
+            script_dir = self.builtin_variables.get("A_ScriptDir", os.getcwd())
+            candidates.append(os.path.join(script_dir, path))
+            candidates.append(os.path.join(IMAGES_PATH, path))
+        resolved = None
+        for candidate in candidates:
+            if candidate and os.path.isfile(candidate):
+                resolved = candidate
+                break
+        if resolved is None:
+            return None
+        try:
+            width = int(float(width or 0))
+            height = int(float(height or 0))
+        except (ValueError, TypeError):
+            width, height = 0, 0
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(resolved)
+            if width > 0 and height > 0:
+                img = img.resize((width, height), Image.LANCZOS)
+            return ImageTk.PhotoImage(img)
+        except Exception:
+            try:
+                return tk.PhotoImage(file=resolved)
+            except Exception:
+                return None
+
     def cmd_gui(self, line):
         """Supports Gui commands like Gui, Tab"""
         # Helper function to safely convert to int, handling floats
@@ -3468,51 +3663,72 @@ class Playback(tk.Tk):
             font_style = "bold" if self.font_bold else "normal"
             if command2 == "Text":
                 text = tk.Label(parent, text=command4, bg=self.background_color, fg=self.foreground_color, font=("Segoe UI", self.font_size, font_style))
+                x, y, width, height = self._register_gui_widget(text, options)
                 if "v" in options:
                     self.gui_variables[options["v"]] = text  # for Submit if needed, though Label has no .get()
-                    self.gui_controls[options["v"]] = text
-                text.place(x=safe_int(options["x"]), y=safe_int(options["y"]))
-                right = safe_int(options["x"]) + safe_int(options.get("w", 0))
-                bottom = safe_int(options["y"]) + safe_int(options.get("h", 0))
-                self.max_x = max(self.max_x, right)
-                self.max_y = max(self.max_y, bottom)
+                place_kwargs = {"x": x, "y": y}
+                if width:
+                    place_kwargs["width"] = width
+                if height:
+                    place_kwargs["height"] = height
+                text.place(**place_kwargs)
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
             elif command2 == "Edit":
                 var = tk.StringVar()
+
                 if command4:
                     var.set(command4)
-                entry = tk.Entry(parent, textvariable=var, bg="white", fg="black", insertbackground="black", disabledbackground="white", disabledforeground="black",)
-                # Initialize values
-                if not "h" in options:
+
+                entry = tk.Entry(
+                    parent,
+                    textvariable=var,
+                    bg="white",
+                    fg="black",
+                    insertbackground="black",
+                    disabledbackground="white",
+                    disabledforeground="black",
+                )
+
+                # Initialize default height
+                if "h" not in options:
                     options["h"] = 28 if sys.platform == "darwin" else 30
-                entry.place(x=safe_int(options["x"]),y=safe_int(options["y"]),width=safe_int(options["w"]),height=safe_int(options["h"]))
+
+                x, y, width, height = self._register_gui_widget(entry, options)
+                entry.place(x=x, y=y, width=width, height=height)
+
                 if "v" in options:
                     self.gui_variables[options["v"]] = var
-                    self.gui_controls[options["v"]] = entry
-                right = safe_int(options["x"]) + safe_int(options.get("w", 0))
-                bottom = safe_int(options["y"]) + safe_int(options.get("h", 0))
-                self.max_x = max(self.max_x, right)
-                self.max_y = max(self.max_y, bottom)
+
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
             elif command2 == "GroupBox":
                 group = tk.LabelFrame(parent, text=command4, borderwidth=3, bg=self.background_color, fg=self.foreground_color, font=("Segoe UI", self.font_size, font_style))
-                if "v" in options:
-                    self.gui_controls[options["v"]] = group
-                group.place(x=safe_int(options["x"]), y=safe_int(options["y"]), width=safe_int(options["w"]), height=safe_int(options["h"]))
-                right = safe_int(options["x"]) + safe_int(options.get("w", 0))
-                bottom = safe_int(options["y"]) + safe_int(options.get("h", 0))
-                self.max_x = max(self.max_x, right)
-                self.max_y = max(self.max_y, bottom)
+                x, y, width, height = self._register_gui_widget(group, options)
+                group.place(x=x, y=y, width=width, height=height)
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
             elif command2 == "Button":
                 def _btn_cmd():
                     if "g" in options:
                         self.execute_gosub(options["g"])
-                button = tk.Button(parent, text=command4, command=_btn_cmd)
-                if "v" in options:
-                    self.gui_controls[options["v"]] = button
-                button.place(x=safe_int(options["x"]), y=safe_int(options["y"]), width=safe_int(options["w"]), height=safe_int(options["h"]))
-                right = safe_int(options["x"]) + safe_int(options.get("w", 0))
-                bottom = safe_int(options["y"]) + safe_int(options.get("h", 0))
-                self.max_x = max(self.max_x, right)
-                self.max_y = max(self.max_y, bottom)
+
+                button = tk.Button(
+                    parent,
+                    text=command4,
+                    command=_btn_cmd
+                )
+
+                x, y, width, height = self._register_gui_widget(button, options)
+                place_kwargs = {"x": x, "y": y}
+                if width:
+                    place_kwargs["width"] = width
+                if height:
+                    place_kwargs["height"] = height
+                button.place(**place_kwargs)
+
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
             elif command2 == "Link":
                 link = command4.replace('<a href="', "")
                 link = link.replace("</a>", "")
@@ -3529,29 +3745,37 @@ class Playback(tk.Tk):
                     "<Button-1>",
                     lambda e, u=url: open_link(u)()
                 )
-                label.place(
-                    x=safe_int(options.get("x", 0)),
-                    y=safe_int(options.get("y", 0))
-                )
+                x, y, width, height = self._register_gui_widget(label, options)
+                place_kwargs = {"x": x, "y": y}
+                if width:
+                    place_kwargs["width"] = width
+                if height:
+                    place_kwargs["height"] = height
+                label.place(**place_kwargs)
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
             elif command2 == "ComboBox":
                 values = command4.split("|")
                 var = tk.StringVar()
                 if values:
                     var.set(values[0])
                 combobox = ttk.Combobox(parent, values=values, textvariable=var)
+                x, y, width, height = self._register_gui_widget(combobox, options)
+                place_kwargs = {"x": x, "y": y}
+                if width:
+                    place_kwargs["width"] = width
+                if height:
+                    place_kwargs["height"] = height
+                combobox.place(**place_kwargs)
                 if "v" in options:
                     self.gui_variables[options["v"]] = var
-                    self.gui_controls[options["v"]] = combobox
-                combobox.place(
-                    x=safe_int(options["x"]),
-                    y=safe_int(options["y"]),
-                    width=safe_int(options["w"])
-                )
                 if "g" in options:
                     try:
                         combobox.bind("<<ComboboxSelected>>", lambda event: self.execute_gosub(options["g"]))
                     except:
                         pass
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
 
             elif command2 == "DropDownList":
                 values = command4.split("|")
@@ -3559,19 +3783,22 @@ class Playback(tk.Tk):
                 if values:
                     var.set(values[0])
                 combobox = ttk.Combobox(parent, state="readonly", values=values, textvariable=var)
+                x, y, width, height = self._register_gui_widget(combobox, options)
+                place_kwargs = {"x": x, "y": y}
+                if width:
+                    place_kwargs["width"] = width
+                if height:
+                    place_kwargs["height"] = height
+                combobox.place(**place_kwargs)
                 if "v" in options:
                     self.gui_variables[options["v"]] = var
-                    self.gui_controls[options["v"]] = combobox
-                combobox.place(
-                    x=safe_int(options["x"]),
-                    y=safe_int(options["y"]),
-                    width=safe_int(options["w"])
-                )
                 if "g" in options:
                     try:
                         combobox.bind("<<ComboboxSelected>>", lambda event: self.execute_gosub(options["g"]))
                     except:
                         pass
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
 
             elif command2 == "Checkbox":
                 try:
@@ -3586,15 +3813,52 @@ class Playback(tk.Tk):
                         command=_checkbox_cmd,
                         style="Dark.TCheckbutton"
                     )
+                    x, y, width, height = self._register_gui_widget(checkbox, options)
+                    place_kwargs = {"x": x, "y": y}
+                    if width:
+                        place_kwargs["width"] = width
+                    if height:
+                        place_kwargs["height"] = height
+                    checkbox.place(**place_kwargs)
                     if "v" in options:
                         self.gui_variables[options["v"]] = var
-                        self.gui_controls[options["v"]] = checkbox
-                    checkbox.place(
-                        x=safe_int(options["x"]),
-                        y=safe_int(options["y"])
-                    )
+                    self.max_x = max(self.max_x, x + width)
+                    self.max_y = max(self.max_y, y + height)
                 except:
                     pass
+
+            elif command2 in ("Image", "Picture", "Pic"):
+                x = safe_int(options.get("x", 0))
+                y = safe_int(options.get("y", 0))
+                width = safe_int(options.get("w", 0))
+                height = safe_int(options.get("h", 0))
+                photo = self._load_gui_image(command4, width, height)
+                image_label = tk.Label(
+                    parent,
+                    image=photo if photo is not None else "",
+                    text="" if photo is not None else command4,
+                    bg=self.background_color,
+                    fg=self.foreground_color,
+                    borderwidth=0,
+                    highlightthickness=0,
+                )
+                image_label._is_gui_image = True
+                if photo is not None:
+                    image_label.image = photo
+                if "g" in options:
+                    image_label.config(cursor="hand2")
+                    image_label.bind("<Button-1>", lambda e: self.execute_gosub(options["g"]))
+                x, y, width, height = self._register_gui_widget(image_label, options, width, height)
+                if "v" in options and photo is not None:
+                    self.gui_images[options["v"]] = photo
+                place_kwargs = {"x": x, "y": y}
+                if width:
+                    place_kwargs["width"] = width
+                if height:
+                    place_kwargs["height"] = height
+                image_label.place(**place_kwargs)
+                self.max_x = max(self.max_x, x + width)
+                self.max_y = max(self.max_y, y + height)
 
             elif command == "Submit":
                 for name, widget in self.gui_variables.items():
@@ -3781,11 +4045,11 @@ class Playback(tk.Tk):
 
             # Substitute %Var% tokens before dispatching other commands
             processed_line = self._handle_variable(line)
-            print("Line ", self.current_line_count, ": ", processed_line)
+            print("Processing: ", processed_line)
             # All commands go here
             if processed_line.startswith("GuiControl"):
                 self.cmd_guicontrol(processed_line)
-            if processed_line.startswith("Gui"):
+            if processed_line.startswith("Gui") and not processed_line.startswith("GuiControl"):
                 self.cmd_gui(processed_line)
             if processed_line.startswith("MsgBox"):
                 self._cmd_msgbox(processed_line)
