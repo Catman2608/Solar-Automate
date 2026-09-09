@@ -50,9 +50,6 @@ try:
 except:
     open_mode = "Editor"
     folder_path = os.getcwd()
-open_mode = "Playback"
-file_path = "Solar Fishing Lite.ahk"
-playback_path = os.path.join(folder_path, file_path)
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
@@ -4045,7 +4042,6 @@ class Playback(tk.Tk):
 
             # Substitute %Var% tokens before dispatching other commands
             processed_line = self._handle_variable(line)
-            print("Processing: ", processed_line)
             # All commands go here
             if processed_line.startswith("GuiControl"):
                 self.cmd_guicontrol(processed_line)
