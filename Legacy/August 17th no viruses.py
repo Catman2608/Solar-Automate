@@ -1513,6 +1513,57 @@ class Playback(tk.Tk):
             # you'll need to remember its original x/y
             pass
 
+    def _normalize_hotkey_name(self, key_name):
+        """Normalize AHK-style hotkey names so they can be compared with pynput events."""
+        if key_name is None:
+            return ""
+
+        raw = str(key_name).strip().replace(" ", "")
+        if not raw:
+            return ""
+
+        modifiers = []
+        main_parts = []
+        i = 0
+        while i < len(raw):
+            ch = raw[i]
+            if ch == "^":
+                modifiers.append("CTRL")
+                i += 1
+            elif ch == "!":
+                modifiers.append("ALT")
+                i += 1
+            elif ch == "+":
+                modifiers.append("SHIFT")
+                i += 1
+            elif ch == "#":
+                modifiers.append("LWIN")
+                i += 1
+            else:
+                j = i
+                while j < len(raw) and raw[j] not in "^!+#":
+                    j += 1
+                token = raw[i:j].upper()
+                if token in {"CTRL", "CONTROL", "CTL"}:
+                    modifiers.append("CTRL")
+                elif token in {"ALT"}:
+                    modifiers.append("ALT")
+                elif token in {"SHIFT"}:
+                    modifiers.append("SHIFT")
+                elif token in {"WIN", "LWIN", "RWIN", "SUPER", "LSUPER", "RSUPER"}:
+                    modifiers.append("LWIN")
+                else:
+                    main_parts.append(token)
+                i = j
+        if not main_parts:
+            return "+".join(modifiers)
+
+        main = "".join(main_parts)
+        if not modifiers:
+            return main
+
+        return "+".join(modifiers + [main])
+
     def cmd_hotkey(self, action):
         """
         Emulate AHK Hotkey command (basic On/Off support):

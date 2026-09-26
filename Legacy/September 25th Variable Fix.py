@@ -1174,24 +1174,9 @@ class Playback(tk.Tk):
         self.loop_end = 0
         self.gui_variables = {}
         self.gui_controls = {}
-        # Unified Hotkey Registry: Normalized_Key -> Label_Name (Str) Or Body Lines (List)
-        # Presence In The Dict Means The Hotkey Is Enabled. Hotkey, ..., Off Deletes The Entry.
-        self.hotkeys = {}
-        self._active_hotkey_modifiers = set()
-        self.hotkey_listener = None  # retained for compatibility (unused; unified key_listener is used)
-        self._hotkey_listener_started = False
-        # Start Unified Key Listener (Handles Both Recording Capture And Hotkey Dispatch)
-        self.key_listener = KeyListener(on_press=self.on_key_press, on_release=self.on_key_release)
-        self.key_listener.daemon = True
-        self.key_listener.start()
         self.active_windows = {}
         script_full = os.path.abspath(playback_path)
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
         self.builtin_variables = {
-            "A_ScreenWidth": screen_width,
-            "A_ScreenHeight": screen_height,
-            "A_ScreenDPI": self.get_screen_dpi(),
             "A_ScriptFullPath": script_full,
             "A_ScriptDir": os.path.dirname(script_full),
             "A_ScriptName": os.path.basename(script_full),
@@ -1205,7 +1190,7 @@ class Playback(tk.Tk):
         self.labels_start = {}
         self.labels_end = {}
         self.local_variables = {}
-        self.flow = None
+        self.pending_actions = {}
         self.font_bold = False
         try:
             style = ttk.Style()
@@ -1233,9 +1218,6 @@ class Playback(tk.Tk):
         end = int(end_line)
         # Start Macro
         for line, processed_line in enumerate(_script):
-            if self.flow:
-                break
-
             if line <= start or line <= skip_until:
                 continue
 
@@ -1243,12 +1225,10 @@ class Playback(tk.Tk):
                 break
 
             processed_line2 = processed_line.lower().replace("    ", "")
-            if processed_line.startswith(";") or processed_line.strip() == "":
+            if processed_line.startswith(";") or processed_line == "":
                 continue
 
-            flow = self._flow_command(processed_line2)
-            if flow:
-                self.flow = flow
+            if processed_line == "return":
                 break
 
             if debug == True:
@@ -1298,22 +1278,20 @@ class Playback(tk.Tk):
                 continue
 
             # Loop, Amount
-            # Loop { ... } is infinite. Loop, N { ... } runs N times.
-            # N may be a literal or a %Var% / identifier resolved at runtime.
-            loop_pattern = r'(?mi)^\s*Loop(?:\s*,\s*(.+?))?\s*\{'
+            loop_pattern = r'(?mi)^\s*Loop(?:\s*,\s*(\d+))?\s*\{'
             is_loop = re.match(loop_pattern, processed_line)
             if is_loop:
-                raw_count = is_loop.group(1)
-                if raw_count is None or str(raw_count).strip() == "":
-                    loop_count = None
-                else:
-                    resolved = self.handle_variable(str(raw_count).strip(), line)
+                try:
+                    loop_count = int(is_loop.group(1))
+                except:
                     try:
-                        loop_count = int(float(str(resolved).strip() or 0))
-                    except (TypeError, ValueError):
-                        loop_count = 0
+                        # Plain "Loop" = infinite loop is not currently supported,
+                        # so default to one iteration.
+                        loop_count = 1
+                    except:
+                        continue
 
-                # cmd_loop already runs the body loop_count times (or until Break).
+                # cmd_loop already runs the body loop_count times.
                 # Jump past the matching } so the body is not run an extra time.
                 skip_until = self.cmd_loop(line, loop_count, _script)
                 continue
@@ -1335,8 +1313,6 @@ class Playback(tk.Tk):
                     start_line2 = self.functions_start[function_name]
                     end_line2 = self.functions_end[function_name]
                     self.execute_script(start_line2, end_line2)
-                    if self.flow == "return":
-                        self.flow = None
                 except Exception as e:
                     if function_name in self.builtin_functions:
                         args = self.split_args(parameters)
@@ -1349,16 +1325,12 @@ class Playback(tk.Tk):
             match = re.match(variable_assignment_pattern, processed_line)
             if match:
                 variable_name = match.group(1)
-                # Resolve functions / %Var% / bare identifiers first.
-                # Then evaluate arithmetic (including parentheses and chains)
-                # if the result is not already an integer.
-                variable_value = self.handle_variable(match.group(2))
+                variable_value = self.handle_variable(match.group(2), line)
                 try:
                     int(variable_value)
-                except (TypeError, ValueError):
+                except:
                     variable_value = self.handle_math(variable_value)
                 self.local_variables[variable_name] = variable_value
-                # print(f"Variable Subsitution: {variable_name} := {variable_value} ({match.group(2)})")
             # VariableName .= Value
             # AHK v1: same as Var := Var . Value (expression).
             # FileName "|"  ->  FileName . "|"
@@ -1388,9 +1360,6 @@ class Playback(tk.Tk):
                     pass
 
                 messagebox.showerror(f"MsgBox", f"{msgbox_text}")
-            # Hotkey, Hotkey, Label, Status
-            if processed_line2.startswith("hotkey"):
-                self.cmd_hotkey(processed_line)
             # IniRead, OutputVar, Filename, Section, Key, Default=ERROR
             # IniWrite, Value, Filename, Section, Key
             if processed_line2.startswith("ini"):
@@ -1407,6 +1376,7 @@ class Playback(tk.Tk):
             # Gui, Action
             if processed_line2.startswith("gui") and not processed_line2.startswith("guicontrol"):
                 self.cmd_gui(processed_line)
+            self._flush_pending_actions()
     def cmd_gui(self, line):
         # Define defaults
         arguments = [p.strip() for p in line.split(",")]
@@ -1520,12 +1490,7 @@ class Playback(tk.Tk):
                 self.gui_controls[v] = group
             # Gui, Add, Checkbox
             if arguments[2] == "Checkbox":
-                try:
-                    self.gui_variables[v] = tk.StringVar(value=0)
-                except:
-                    self.gui_variables["0"] = tk.StringVar(value=0)
-                checkbox = ttk.Checkbutton(self.current_tab2, text=arguments[4], variable=self.gui_variables[v], onvalue="1", offvalue="0",
-                                           command=lambda label=g: self.cmd_gosub(f"GoSub, {label}") if label else None, style="Dark.TCheckbutton")
+                checkbox = ttk.Checkbutton(self.current_tab2, text=arguments[4], style="Dark.TCheckbutton")
                 checkbox.place(x=(x - current_offset_x), y=(y - current_offset_y))
                 self.gui_controls[v] = checkbox
             # Gui, Add, Button
@@ -1560,10 +1525,6 @@ class Playback(tk.Tk):
                             self.local_variables[var_name] = tvar.get()
                         self.cmd_gosub(f"GoSub, {label}")
                     combobox.bind("<<ComboboxSelected>>", _on_dropdown_selected)
-        # Gui, Submit, NoHide
-        if arguments[1] == "Submit":
-            for key, value in self.gui_variables.items():
-                self.local_variables[key] = self.gui_variables[key].get()
         # Gui, Show
         if arguments[1] == "Show":
             self.deiconify
@@ -1989,25 +1950,6 @@ class Playback(tk.Tk):
 
             return if_end
 
-    def _flow_command(self, processed_line2):
-        """
-        Detect AHK flow commands: Break, Continue, Return.
-        Trailing comments and an optional comma argument are ignored.
-        """
-        text = processed_line2.strip()
-        if not text or text.startswith(";"):
-            return None
-
-        if ";" in text:
-            text = text.split(";", 1)[0].strip()
-        if not text:
-            return None
-
-        name = text.split(",", 1)[0].split(None, 1)[0].lower()
-        if name in ("break", "continue", "return"):
-            return name
-        return None
-
     def cmd_loop(self, start_line, loop_count, script=None):
         # Initialize Defaults
         if script == None:
@@ -2028,32 +1970,8 @@ class Playback(tk.Tk):
         self.loop_end = loop_end
         # execute_script skips start_line and stops at end_line, so the body
         # is start_line+1 .. loop_end-1 (the lines inside the braces).
-        # loop_count is None for an infinite Loop { ... }.
-        old_a_index = self.local_variables.get("A_Index")
-        i = 0
-        while True:
-            if loop_count is not None and i >= int(loop_count):
-                break
-
-            i += 1
-            self.local_variables["A_Index"] = i
+        for i in range(int(loop_count)):
             self.execute_script(start_line, loop_end, _script)
-            flow = self.flow
-            if flow == "continue":
-                self.flow = None
-                continue
-
-            if flow == "break":
-                self.flow = None
-                break
-
-            if flow == "return":
-                break
-
-        if old_a_index is not None:
-            self.local_variables["A_Index"] = old_a_index
-        else:
-            self.local_variables.pop("A_Index", None)
         return loop_end
 
     def _set_file_loop_variables(self, filepath):
@@ -2181,18 +2099,6 @@ class Playback(tk.Tk):
             self._set_file_loop_variables(filepath)
             # Execute the body
             self.execute_script(start_line, loop_end, _script)
-            flow = self.flow
-            if flow == "continue":
-                self.flow = None
-                continue
-
-            if flow == "break":
-                self.flow = None
-                break
-
-            if flow == "return":
-                break
-
         # Restore A_Index
         if old_a_index is not None:
             self.local_variables["A_Index"] = old_a_index
@@ -2206,10 +2112,7 @@ class Playback(tk.Tk):
             function_name = arguments[1]
             start = self.labels_start[function_name]
             end = self.labels_end[function_name]
-            self.execute_script(start, end, self.script, True)
-            # Return inside a GoSub ends the subroutine, not the caller.
-            if self.flow == "return":
-                self.flow = None
+            self.execute_script(start, end)
             return 0
 
         except KeyError as e:
@@ -2240,32 +2143,26 @@ class Playback(tk.Tk):
     def _eval_math(self, value):
         """
         Evaluate a more complex math expression.
-        Known script variables are substituted first so
-        (WindowHeight/2)-(20*9) and a + b + c work.
-        Unset identifiers become 0 (AHK v1 expression math).
+        Known script variables are substituted first so a + b + c works.
         """
         expr = str(value)
-
         def replace_percent(match):
             name = match.group(1)
             return str(self._ahk_float(self._lookup_variable(name, "")))
 
         expr = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", replace_percent, expr)
-
         def replace_ident(match):
             name = match.group(0)
             found = self._lookup_variable(name, None)
             if found is not None:
                 return str(self._ahk_float(found))
-            # AHK v1: unset/blank operands are 0 in expressions.
-            return "0"
+
+            return name
 
         expr = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", replace_ident, expr)
-        expr = expr.replace(" ", "")
-        if not re.fullmatch(r"[\d.+\-*/()]+", expr or ""):
-            return value
         try:
             return eval(expr, {"__builtins__": {}}, {})
+
         except Exception:
             return value
 
@@ -2407,10 +2304,6 @@ class Playback(tk.Tk):
         raw = str(value)
         stripped = raw.strip()
 
-        # Update some variables if needed
-        if "A_TickCount" in value:
-            self.builtin_variables["A_TickCount"] = time.perf_counter() * 1000
-
         if scan_functions:
             function_pattern = r'(?mi)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$'
             is_function_call = re.match(function_pattern, stripped)
@@ -2422,8 +2315,6 @@ class Playback(tk.Tk):
                     start_line2 = self.functions_start[user_name]
                     end_line2 = self.functions_end[user_name]
                     self.execute_script(start_line2, end_line2)
-                    if self.flow == "return":
-                        self.flow = None
                     return raw
                 builtin = self._lookup_builtin_function(function_name)
                 if builtin is not None:
@@ -2475,6 +2366,45 @@ class Playback(tk.Tk):
 
         raise UnicodeError(f"Unable to read {filename}")
 
+    def _get_pending_ini(self, filename):
+        """
+        Get the in-memory version of an INI file.
+
+        The file is only read from disk once until the pending actions
+        are flushed.
+        """
+        if filename not in self.pending_actions:
+            if os.path.exists(filename):
+                try:
+                    lines = self.read_ini(filename)
+                except Exception:
+                    lines = []
+            else:
+                lines = []
+
+            self.pending_actions[filename] = lines
+
+        return self.pending_actions[filename]
+
+    def _flush_pending_actions(self):
+        """
+        Write all pending INI changes to disk.
+
+        Multiple IniWrite commands targeting the same file therefore
+        result in only one actual file write.
+        """
+        if not self.pending_actions:
+            return
+
+        for filename, lines in self.pending_actions.items():
+            try:
+                with open(filename, "w", encoding="utf-16") as f:
+                    f.writelines(lines)
+            except Exception as e:
+                print(f"Failed to write INI file '{filename}': {e}")
+
+        self.pending_actions.clear()
+
     def cmd_ini(self, action):
         parts = [x.strip() for x in action.split(",")]
         command = parts[0].lower()
@@ -2514,28 +2444,30 @@ class Playback(tk.Tk):
                 filename = filename.replace("\\", "/")
             # Start With The Default; Only Overwrite If The Key Is Actually Found
             value = default
-            if os.path.exists(filename):
+            if filename in self.pending_actions:
+                lines = self.pending_actions[filename]
+            elif os.path.exists(filename):
                 try:
                     lines = self.read_ini(filename)
                 except Exception:
                     lines = []
             else:
                 lines = []
-            current_section = None
-            for line in lines:
-                stripped = line.strip()
-                if stripped.startswith("[") and stripped.endswith("]"):
-                    current_section = stripped[1:-1]
-                    continue
+                current_section = None
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("[") and stripped.endswith("]"):
+                        current_section = stripped[1:-1]
+                        continue
 
-                if current_section != section:
-                    continue
+                    if current_section != section:
+                        continue
 
-                if "=" in stripped:
-                    k, v = stripped.split("=", 1)
-                    if k.strip() == key:
-                        value = v.rstrip("\r\n")
-                        break
+                    if "=" in stripped:
+                        k, v = stripped.split("=", 1)
+                        if k.strip() == key:
+                            value = v.rstrip("\r\n")
+                            break
 
             self.local_variables[output_var] = value
             return
@@ -2550,17 +2482,10 @@ class Playback(tk.Tk):
             value, filename, section, key = parts[1:5]
 
             # Resolve %Var% References
-            value = self.handle_variable(value)
-            filename = self.handle_variable(filename)
-            if section.startswith("%"):
-                section = self.handle_variable(section)
-            if key.startswith("%"):
-                key = self.handle_variable(key)
-            filename = self.handle_concat(filename)
-            if section.startswith("%"):
-                section = self.handle_concat(section)
-            if key.startswith("%"):
-                key = self.handle_concat(key)
+            value = self._handle_variable(value)
+            filename = self._handle_variable(filename)
+            section = self._handle_variable(section)
+            key = self._handle_variable(key)
 
             filename = filename.strip('"').strip("'")
             section = section.strip('"').strip("'")
@@ -2570,13 +2495,9 @@ class Playback(tk.Tk):
             if sys.platform != "win32":
                 filename = filename.replace("\\", "/")
 
-            if os.path.exists(filename):
-                try:
-                    lines = self.read_ini(filename)
-                except Exception:
-                    lines = []
-            else:
-                lines = []
+            # Get the cached/in-memory version of this INI file.
+            # This only reads the file from disk the first time.
+            lines = self._get_pending_ini(filename)
 
             found_section = False
             written = False
@@ -2621,11 +2542,9 @@ class Playback(tk.Tk):
             elif not written:
                 output.append(f"{key}={value}\n")
 
-            try:
-                with open(filename, "w", encoding="utf-16") as f:
-                    f.writelines(output)
-            except Exception as e:
-                print(f"Failed to write INI file '{filename}': {e}")
+            # Store the modified file in memory.
+            # DO NOT write to disk here.
+            self.pending_actions[filename] = output
 
             return
 
@@ -3013,245 +2932,6 @@ class Playback(tk.Tk):
             self.local_variables[out_w] = info["width"]
         if out_h:
             self.local_variables[out_h] = info["height"]
-
-    def get_screen_dpi(self):
-        if sys.platform == "win32":
-            try:
-                user32 = ctypes.windll.user32
-                if hasattr(user32, "GetDpiForSystem"):
-                    screen_dpi = user32.GetDpiForSystem()
-                else:
-                    LOGPIXELSX = 88
-                    hdc = user32.GetDC(0)
-                    gdi32 = ctypes.windll.gdi32
-                    screen_dpi = gdi32.GetDeviceCaps(hdc, LOGPIXELSX)
-                    user32.ReleaseDC(0, hdc)
-            except Exception:
-                screen_dpi = 96
-        else:
-            screen_dpi = 96
-        return screen_dpi
-
-    def cmd_hotkey(self, action):
-        """
-        Emulate AHK Hotkey command (basic On/Off support):
-            Hotkey, %StartKey%, StartMacro, On
-            Hotkey, %StopKey%, StopMacro, Off
-        Syntax supported:
-            Hotkey, KeyName, LabelName, On|Off
-            Hotkey, KeyName, LabelName  (defaults to On)
-        """
-        if "," not in action:
-            return
-
-        _, rest = action.split(",", 1)
-        parts = [p.strip() for p in rest.split(",")]
-        while len(parts) < 3:
-            parts.append("")
-        key_name = parts[0]
-        label_name = parts[1]
-        state = parts[2].lower() if parts[2] else "on"
-        # Resolve %Var% in the key (Hotkey, %StartKey%, StartMacro, On).
-        # Do not run a bare label through handle_variable — missing names become "".
-        if "%" in str(key_name):
-            key_name = self.handle_variable(key_name)
-        if "%" in str(label_name):
-            label_name = self.handle_variable(label_name)
-        key_name = str(key_name).strip().upper()
-        label_name = str(label_name).strip()
-        if not key_name:
-            return
-
-        normalized_key = self._normalize_hotkey_name(key_name)
-        if not normalized_key:
-            return
-        if state in ("on", "1", "true", "toggle"):
-            self.hotkeys[normalized_key] = label_name
-        elif state in ("off", "0", "false"):
-            self.hotkeys.pop(normalized_key, None)
-
-    def _normalize_pynput_key(self, key):
-        """Convert a pynput key event to an AHK-style uppercase key name (F1, A, SPACE, etc.)."""
-        try:
-            if key is None:
-                return None
-
-            if hasattr(key, "char") and key.char is not None:
-                char = key.char
-                if char in {"\r", "\n"}:
-                    return "ENTER"
-
-                if char == " ":
-                    return "SPACE"
-
-                return char.upper()
-
-            name = str(key).replace("Key.", "").upper()
-            aliases = {
-                "SPACE": "SPACE",
-                "ENTER": "ENTER",
-                "RETURN": "ENTER",
-                "ESC": "ESCAPE",
-                "ESCAPE": "ESCAPE",
-                "BACKSPACE": "BACKSPACE",
-                "TAB": "TAB",
-                "SHIFT": "SHIFT",
-                "CTRL": "CTRL",
-                "CONTROL": "CTRL",
-                "CTRL_L": "CTRL",
-                "CTRL_R": "CTRL",
-                "ALT": "ALT",
-                "ALT_L": "ALT",
-                "ALT_R": "ALT",
-                "CMD": "LWIN",
-                "CMD_L": "LWIN",
-                "CMD_R": "RWIN",
-                "SUPER": "LWIN",
-                "SUPER_L": "LWIN",
-                "SUPER_R": "RWIN",
-                "LEFT": "LEFT",
-                "RIGHT": "RIGHT",
-                "UP": "UP",
-                "DOWN": "DOWN",
-                "PAGEUP": "PGUP",
-                "PAGEDOWN": "PGDN",
-                "HOME": "HOME",
-                "END": "END",
-                "INSERT": "INSERT",
-                "DELETE": "DELETE",
-                "CAPSLOCK": "CAPSLOCK",
-            }
-            return aliases.get(name, name)
-
-        except Exception:
-            return None
-
-    def _normalize_hotkey_name(self, key_name):
-        """Normalize AHK-style hotkey names so they can be compared with pynput events."""
-        if key_name is None:
-            return ""
-
-        raw = str(key_name).strip().replace(" ", "")
-        if not raw:
-            return ""
-
-        modifiers = []
-        main_parts = []
-        i = 0
-        while i < len(raw):
-            ch = raw[i]
-            if ch == "^":
-                modifiers.append("CTRL")
-                i += 1
-            elif ch == "!":
-                modifiers.append("ALT")
-                i += 1
-            elif ch == "+":
-                modifiers.append("SHIFT")
-                i += 1
-            elif ch == "#":
-                modifiers.append("LWIN")
-                i += 1
-            else:
-                j = i
-                while j < len(raw) and raw[j] not in "^!+#":
-                    j += 1
-                token = raw[i:j].upper()
-                if token in {"CTRL", "CONTROL", "CTL"}:
-                    modifiers.append("CTRL")
-                elif token in {"ALT"}:
-                    modifiers.append("ALT")
-                elif token in {"SHIFT"}:
-                    modifiers.append("SHIFT")
-                elif token in {"WIN", "LWIN", "RWIN", "SUPER", "LSUPER", "RSUPER"}:
-                    modifiers.append("LWIN")
-                else:
-                    main_parts.append(token)
-                i = j
-        if not main_parts:
-            return self._canonical_hotkey(modifiers)
-
-        main = "".join(main_parts)
-        return self._canonical_hotkey(modifiers, main)
-
-    _MODIFIER_KEYS = {"CTRL", "ALT", "SHIFT", "LWIN", "RWIN"}
-    _MODIFIER_ORDER = ("CTRL", "ALT", "SHIFT", "LWIN", "RWIN")
-
-    def _canonical_hotkey(self, modifiers, main=""):
-        """Build a stable CTRL+ALT+SHIFT+LWIN+KEY string for lookup."""
-        present = {str(m).upper() for m in modifiers if m}
-        # Treat either Windows/Command key as the same modifier for matching.
-        if "RWIN" in present:
-            present.add("LWIN")
-        mods = [m for m in self._MODIFIER_ORDER if m in present and m != "RWIN"]
-        main = str(main).upper().strip() if main else ""
-        if not main:
-            return "+".join(mods)
-        if not mods:
-            return main
-        return "+".join(mods + [main])
-
-    def _lookup_label(self, label_name):
-        """Find a label by exact name, then case-insensitive name."""
-        if not label_name:
-            return None
-        if label_name in self.labels_start:
-            return label_name
-        wanted = str(label_name).lower()
-        for name in self.labels_start:
-            if name.lower() == wanted:
-                return name
-        return None
-
-    def _dispatch_hotkey(self, target):
-        """Run a hotkey target (label name or list of body lines) on the Tk thread."""
-        if target is None or target == "":
-            return
-
-        def run():
-            try:
-                if isinstance(target, list):
-                    self.execute_script(0, len(target), target)
-                else:
-                    label = self._lookup_label(str(target).strip())
-                    if label is None:
-                        return
-                    start = self.labels_start[label]
-                    end = self.labels_end[label]
-                    self.execute_script(start, end, self.script, True)
-                if self.flow == "return":
-                    self.flow = None
-            except Exception:
-                pass
-
-        try:
-            self.after(0, run)
-        except Exception:
-            run()
-
-    def on_key_press(self, key):
-        """Dispatch a registered hotkey when a pynput key press matches a known binding."""
-        normalized = self._normalize_pynput_key(key)
-        if normalized is None:
-            return
-
-        if normalized in self._MODIFIER_KEYS:
-            self._active_hotkey_modifiers.add(normalized)
-            return
-
-        combo = self._canonical_hotkey(self._active_hotkey_modifiers, normalized)
-        target = self.hotkeys.get(combo)
-        if target is None:
-            return
-        self._dispatch_hotkey(target)
-
-    def on_key_release(self, key):
-        """Clear active modifiers when a modifier key is released."""
-        normalized = self._normalize_pynput_key(key)
-        if normalized is None:
-            return
-        if normalized in self._MODIFIER_KEYS:
-            self._active_hotkey_modifiers.discard(normalized)
 
 if __name__ == "__main__":
     if open_mode == "Editor":
