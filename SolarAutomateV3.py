@@ -48,10 +48,9 @@ try:
     playback_path = sys.argv[1]
     open_mode = "Playback"
 except:
-    open_mode = "Editor"
+    open_mode = "Main Menu"
     folder_path = os.getcwd()
-playback_path = "Solar Fishing Lite.ahk"
-open_mode = "Playback"
+
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
@@ -482,116 +481,181 @@ def cgimage_to_srgb_numpy(image):
 class MainGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.geometry("650x300")
-        self.title("AutoHotKey Dash")
-        # Sidebar
-        self.sidebar = tk.Frame(self, width=350)
-        self.sidebar.pack(side="left", fill="y")
-        # Prevent sidebar from shrinking below 300px
-        self.sidebar.pack_propagate(False)
-        self.sidebar.config(width=250)  # Ensure width is explicitly set
-        # Main content
-        self.content = tk.Frame(self)
-        self.content.pack(side="right", fill="both", expand=True)
+        self.geometry("670x670")
+        self.title("Solar Automate Main Menu")
         # Ahk2Py
         self.ahk_converter = Ahk2Py(self)
         self.ahk_editor = AhkEditor(self)
-        # Build UI
-        self.build_sidebar()
-        self.build_main_content()
+        self.window_spy = WindowSpy(self)
+        # Other Settings
+        if sys.platform == "darwin":
+            style = ttk.Style()
+            style.theme_use("clam")
+            style.configure("TNotebook.Tab", padding=(0, 0, 0, 0))
+        # TTK Notebook/TabView
+        notebook = ttk.Notebook(self)
+        notebook.place(x=10, y=5, width=650, height=650)
+        self.overview_tab = ttk.Frame(notebook)
+        notebook.add(self.overview_tab, text="Overview")
+        # Build Tabs
+        self.build_overview_tab()
         self.mainloop()
-    def build_sidebar(self):
-        # Load Icons
-        self.editor_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "editor_icon.png"))
-        self.compile_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "compile_icon.png"))
-        self.help_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "help_icon.png"))
-        self.window_spy_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "window_spy_icon.png"))
-        self.launch_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "launch_icon.png"))
-        self.record_icon = tk.PhotoImage(file=os.path.join(IMAGES_PATH, "record_icon.png"))
-        # Configure button style to prevent dark mode auto-coloring
+    def build_overview_tab(self):
+        tk.Label(
+            self.overview_tab,
+            text="Overview",
+            font=("Segoe UI", 9, "bold")
+        ).place(x=10, y=10)
+
+        # Compatibility Options
+        compatibility_options = ttk.LabelFrame(
+            self.overview_tab,
+            text="Compatibility Options"
+        )
+        compatibility_options.place(x=10, y=30, width=300, height=150)
+
+        ttk.Checkbutton(
+            compatibility_options,
+            text="Option 1"
+        ).place(x=20, y=10)
+
+        ttk.Checkbutton(
+            compatibility_options,
+            text="Option 2"
+        ).place(x=20, y=40)
+
+        ttk.Checkbutton(
+            compatibility_options,
+            text="Option 3"
+        ).place(x=20, y=70)
+
+        ttk.Checkbutton(
+            compatibility_options,
+            text="Option 4"
+        ).place(x=20, y=100)
+
+        # AHK Tools
+        ahk_tools = ttk.LabelFrame(
+            self.overview_tab,
+            text="AHK Tools"
+        )
+        ahk_tools.place(x=320, y=30, width=300, height=150)
+
         tk.Button(
-            self.sidebar,
-            text="AHK Visual Editor\nEdit AHK scripts directly",
-            image=self.editor_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0,
+            ahk_tools,
+            text="AHK Visual Editor",
             command=self.ahk_editor.show
-        ).pack(fill="x", padx=0, pady=0)
+        ).place(x=20, y=25, width=200)
+
         tk.Button(
-            self.sidebar,
-            text="Compile\nOpen Ahk2Py - convert .ahk to .py",
-            image=self.compile_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0,
+            ahk_tools,
+            text="AHK To Python",
             command=self.ahk_converter.show
-        ).pack(fill="x", padx=0, pady=0)
+        ).place(x=20, y=60, width=200)
+
         tk.Button(
-            self.sidebar,
-            text="Help Files",
-            image=self.help_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-        tk.Button(
-            self.sidebar,
+            ahk_tools,
             text="Window Spy",
-            image=self.window_spy_icon,
-            compound="left",
-            anchor="w",
-            justify="left",
-            padx=0
-        ).pack(fill="x", padx=0, pady=0)
-    def build_main_content(self):
-        body = tk.Frame(self.content)
-        body.pack(anchor="nw", fill="both", expand=True, padx=0, pady=10)
-        tk.Label(
-            body,
-            text="Welcome!",
-            font=("Segoe UI", 16)
-        ).pack(anchor="w")
-        tk.Label(
-            body,
-            text="This is the Dash. It provides access to tools, settings and help files."
-        ).pack(anchor="w", pady=(5, 0))
-        tk.Label(
-            body,
-            text="To learn how to use AutoHotKey, refer to:"
-        ).pack(anchor="w", pady=(5, 0))
+            command=self.window_spy.show
+        ).place(x=20, y=95, width=200)
+
+        # Solar Automate Links
+        solar_links = ttk.LabelFrame(
+            self.overview_tab,
+            text="Solar Automate Links"
+        )
+        solar_links.place(x=10, y=190, width=300, height=120)
+
         tk.Button(
-            body,
-            text="Using the program"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
+            solar_links,
+            text="Join Solar Automate Discord",
+            command=lambda: open_link(
+                "https://discord.com/invite/aMZY8yrF8r"
+            )
+        ).place(x=20, y=25, width=240)
+
         tk.Button(
-            body,
-            text="How to Write Hotkeys"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
+            solar_links,
+            text="Upcoming Features",
+            command=lambda: open_link(
+                "https://docs.google.com/document/d/1WwWWMR-eN-R-GO42IioToHpWTgiXkLoiNE_4NeE-GsU/"
+            )
+        ).place(x=20, y=60, width=240)
+
+        # AutoHotKey Links
+        ahk_links = ttk.LabelFrame(
+            self.overview_tab,
+            text="AutoHotKey Links"
+        )
+        ahk_links.place(x=320, y=190, width=300, height=120)
+
         tk.Button(
-            body,
-            text="How to Send Keystrokes"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
+            ahk_links,
+            text="Using the Program",
+            command=lambda: open_link(
+                "https://www.autohotkey.com/docs/v2/Program.htm"
+            )
+        ).place(x=20, y=25, width=240)
+
         tk.Button(
-            body,
-            text="How to Run Programs"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
+            ahk_links,
+            text="How to Write Hotkeys",
+            command=lambda: open_link(
+                "https://www.autohotkey.com/docs/v2/howto/WriteHotkeys.htm"
+            )
+        ).place(x=20, y=60, width=240)
+
+        # More AHK Documentation
+        ahk_docs = ttk.LabelFrame(
+            self.overview_tab,
+            text="AutoHotKey Documentation"
+        )
+        ahk_docs.place(x=10, y=320, width=610, height=150)
+
         tk.Button(
-            body,
-            text="How to Manage Windows"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
+            ahk_docs,
+            text="How to Send Keystrokes",
+            command=lambda: open_link(
+                "https://www.autohotkey.com/docs/v2/howto/SendKeys.htm"
+            )
+        ).place(x=20, y=25, width=240)
+
         tk.Button(
-            body,
-            text="Quick Reference"
-        ).pack(anchor="w", fill="x", padx=0, pady=0)
-        tk.Checkbutton(
-            body,
-            text="Show this info next time",
-            anchor="w"
-        ).pack(fill="x", padx=0)
+            ahk_docs,
+            text="How to Run Programs",
+            command=lambda: open_link(
+                "https://www.autohotkey.com/docs/v2/howto/RunPrograms.htm"
+            )
+        ).place(x=320, y=25, width=240)
+
+        tk.Button(
+            ahk_docs,
+            text="How to Manage Windows",
+            command=lambda: open_link(
+                "https://www.autohotkey.com/docs/v2/howto/ManageWindows.htm"
+            )
+        ).place(x=20, y=60, width=240)
+
+        tk.Button(
+            ahk_docs,
+            text="Quick Reference",
+            command=lambda: open_link(
+                "https://www.autohotkey.com/docs/v2/"
+            )
+        ).place(x=320, y=60, width=240)
+
+        # Help Files
+        help_files = ttk.LabelFrame(
+            self.overview_tab,
+            text="Help"
+        )
+        help_files.place(x=10, y=480, width=610, height=55)
+
+        tk.Button(
+            help_files,
+            text="Help Files",
+            command=lambda: open_link("https://www.autohotkey.com/docs/v1/")
+        ).place(x=20, y=10, width=240)
 # AHK Editor
 class AhkEditor:
     # Recorder tuning
@@ -1150,14 +1214,35 @@ class Ahk2Py:
             outfile.write("\n\n")
             outfile.writelines(runtime_end)
         return
-
+# AHK's Window Spy
+class WindowSpy:
+    def __init__(self, master):
+        self.master = master
+        self.window = tk.Toplevel(self.master)
+        self.window.title("Window Spy")
+        self.window.geometry("330x550")
+        self.window.protocol("WM_DELETE_WINDOW", self.hide)
+        self.build_main_content()
+        self.hide()
+    def show(self):
+        self.window.deiconify()
+    def hide(self):
+        self.window.withdraw()
+    def build_main_content(self):
+        main_parameters = tk.LabelFrame(self.window, text="Main Parameters")
+        main_parameters.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        # GUI Content
+        # Grid Configuration
+        self.window.grid_rowconfigure(0, weight=0)
+        self.window.grid_rowconfigure(1, weight=1)
+        self.window.grid_columnconfigure(0, weight=1)
 # AHK playback
 class Playback(tk.Tk):
     def __init__(self, playback_path):
         # Initialization
         super().__init__()
         self.geometry("300x300")
-        self.title("title")
+        self.title(str(playback_path).replace(str(BASE_PATH), ""))
         # Read File
         with open(playback_path, "r", encoding="utf-8-sig") as f:
             self.script_text = f.read()
@@ -1174,9 +1259,13 @@ class Playback(tk.Tk):
         self.loop_end = 0
         self.gui_variables = {}
         self.gui_controls = {}
+        self.gui_expand = False
+        self.gui_expansion_width = 300
+        self.gui_expansion_height = 300
         # Unified Hotkey Registry: Normalized_Key -> Label_Name (Str) Or Body Lines (List)
         # Presence In The Dict Means The Hotkey Is Enabled. Hotkey, ..., Off Deletes The Entry.
         self.hotkeys = {}
+        self._hotkey_threads = {}
         self._active_hotkey_modifiers = set()
         self.hotkey_listener = None  # retained for compatibility (unused; unified key_listener is used)
         self._hotkey_listener_started = False
@@ -1210,7 +1299,7 @@ class Playback(tk.Tk):
         try:
             style = ttk.Style()
             style.theme_use("clam")
-            style.configure("TNotebook.Tab", padding=(2, 1, 2, 1))
+            style.configure("TNotebook.Tab", padding=(0, 0, 0, 0))
         except:
             pass
 
@@ -1353,10 +1442,15 @@ class Playback(tk.Tk):
                 # Then evaluate arithmetic (including parentheses and chains)
                 # if the result is not already an integer.
                 variable_value = self.handle_variable(match.group(2))
-                try:
-                    int(variable_value)
-                except (TypeError, ValueError):
-                    variable_value = self.handle_math(variable_value)
+
+                # Keep an empty string as an empty string.
+                # Do not pass it through the math handler.
+                if variable_value != "":
+                    try:
+                        int(variable_value)
+                    except (TypeError, ValueError):
+                        variable_value = self.handle_math(variable_value)
+
                 self.local_variables[variable_name] = variable_value
                 # print(f"Variable Subsitution: {variable_name} := {variable_value} ({match.group(2)})")
             # VariableName .= Value
@@ -1388,6 +1482,22 @@ class Playback(tk.Tk):
                     pass
 
                 messagebox.showerror(f"MsgBox", f"{msgbox_text}")
+            if processed_line.startswith("pixelsearch"):
+                self.cmd_pixelsearch(processed_line)
+            if processed_line.startswith("pixelgetcolor"):
+                self._cmd_pixelgetcolor(processed_line)
+            if processed_line2.startswith("send"):
+                self._cmd_send(processed_line)
+            if processed_line2.startswith("click"):
+                self._cmd_click(processed_line)
+            if processed_line2.startswith("sleep"):
+                self._cmd_sleep(processed_line)
+            if processed_line2.startswith("mousemove"):
+                self._cmd_mousemove(processed_line)
+            if processed_line2.startswith("mousegetpos"):
+                error = self._cmd_mousegetpos(processed_line)
+                if error != 0:
+                    messagebox.showerror(f"Error at line {line + 1}", f"Error at line {line + 1}\nError in MouseGetPos: {e}")
             # Hotkey, Hotkey, Label, Status
             if processed_line2.startswith("hotkey"):
                 self.cmd_hotkey(processed_line)
@@ -1407,13 +1517,23 @@ class Playback(tk.Tk):
             # Gui, Action
             if processed_line2.startswith("gui") and not processed_line2.startswith("guicontrol"):
                 self.cmd_gui(processed_line)
+            # SetKeyDelay, Delay
+            if processed_line2.startswith("setkeydelay"):
+                parts = [x.strip() for x in processed_line.split(",")]
+                self.key_delay = int(parts[1])
+            # Reload
+            if processed_line2.startswith("reload"):
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            # ExitApp
+            if processed_line2.startswith("exitapp"):
+                self.destroy()
     def cmd_gui(self, line):
         # Define defaults
         arguments = [p.strip() for p in line.split(",")]
         x = 0
         y = 0
         w = 100
-        h = 30
+        h = 28 if sys.platform == "darwin" else 24
         v = ""
         g = ""
         # Gui, Color
@@ -1465,6 +1585,9 @@ class Playback(tk.Tk):
                         break
 
         font_style = "bold" if self.font_bold else "normal"
+        # Gui, +Resize +MinSize
+        if arguments[1] == "+Resize +MinSize":
+            self.gui_expand = True
         # Gui, Add
         if arguments[1] == "Add":
             placement = arguments[3].split(" ")
@@ -1484,6 +1607,10 @@ class Playback(tk.Tk):
                         g = str(item[1:])
             # Gui, Add, Tab2
             if arguments[2] == "Tab2":
+                if w > self.gui_expansion_width:
+                    self.gui_expansion_width = x + w + 18
+                if h > self.gui_expansion_height:
+                    self.gui_expansion_height = y + h + 11
                 tab = ttk.Notebook(self, style="Dark.TNotebook")
                 tab.place(x=x, y=y, width=w, height=h)
                 self.tab_offset_x = x
@@ -1515,6 +1642,10 @@ class Playback(tk.Tk):
                 self.gui_controls[v] = entry
             # Gui, Add, GroupBox
             if arguments[2] == "GroupBox":
+                if w > self.gui_expansion_width:
+                    self.gui_expansion_width = x + w + 18
+                if h > self.gui_expansion_height:
+                    self.gui_expansion_height = y + h + 11
                 group = tk.LabelFrame(self.current_tab2, text=arguments[4], borderwidth=3, bg=self.gui_color, fg=self.color, font=("Segoe UI", self.font_size, font_style))
                 group.place(x=(x - current_offset_x), y=(y - current_offset_y), width=w, height=h)
                 self.gui_controls[v] = group
@@ -1566,6 +1697,8 @@ class Playback(tk.Tk):
                 self.local_variables[key] = self.gui_variables[key].get()
         # Gui, Show
         if arguments[1] == "Show":
+            if self.gui_expand == True:
+                self.geometry(f"{self.gui_expansion_width}x{self.gui_expansion_height}")
             self.deiconify
     # Update Style
     def update_style(self):
@@ -2206,7 +2339,7 @@ class Playback(tk.Tk):
             function_name = arguments[1]
             start = self.labels_start[function_name]
             end = self.labels_end[function_name]
-            self.execute_script(start, end, self.script, True)
+            self.execute_script(start, end, self.script)
             # Return inside a GoSub ends the subroutine, not the caller.
             if self.flow == "return":
                 self.flow = None
@@ -2235,7 +2368,33 @@ class Playback(tk.Tk):
             return float(resolved)
 
         except (TypeError, ValueError):
-            return 0.0
+            math_result = self.handle_math(resolved)
+            try:
+                return float(math_result)
+            except (TypeError, ValueError):
+                return 0.0
+
+    def _resolve_number(self, token, as_int=False):
+        """
+        Resolve a command argument to a number.
+        Accepts literals, %Var%, bare identifiers, and simple math.
+        Unset / blank / non-numeric values become 0 (AHK v1).
+        """
+        raw = "" if token is None else str(token).strip()
+        if raw == "":
+            return 0 if as_int else 0.0
+        num = self._ahk_float(raw)
+        return int(num) if as_int else num
+
+    def _expand_percents(self, value):
+        """Replace %Name% with the variable value (missing -> "")."""
+        raw = "" if value is None else str(value)
+
+        def repl(match):
+            found = self._lookup_variable(match.group(1), None)
+            return "" if found is None else str(found)
+
+        return re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", repl, raw)
 
     def _eval_math(self, value):
         """
@@ -2395,6 +2554,70 @@ class Playback(tk.Tk):
                 return key
         return None
 
+    def _resolve_embedded_calls(self, expr, line=0):
+        """Replace any Func(args) substrings inside expr with their evaluated results."""
+        # Match a function call anywhere in the string (not anchored to start/end)
+        pattern = r'([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)'
+
+        # Repeat until no more matches (handles nesting inside-out)
+        while True:
+            match = re.search(pattern, expr)
+            if not match:
+                break
+
+            full = match.group(0)
+            fname = match.group(1)
+            params = match.group(2)
+
+            user_name = self._lookup_user_function(fname)
+            builtin = self._lookup_builtin_function(fname)
+
+            if user_name is None and builtin is None:
+                # Not a known function — leave it alone to avoid infinite loop
+                break
+
+            # Recursively evaluate the arguments first
+            args = self.split_args(params)
+            for i in range(len(args)):
+                arg = args[i].strip()
+                if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
+                    inner = arg[1:-1]
+                    args[i] = re.sub(
+                        r"%([A-Za-z_][A-Za-z0-9_]*)%",
+                        lambda m: (
+                            "" if self._lookup_variable(m.group(1), None) is None
+                            else str(self._lookup_variable(m.group(1), ""))
+                        ),
+                        inner,
+                    )
+                else:
+                    resolved = self.handle_variable(arg, line, True)
+                    if isinstance(resolved, str):
+                        if re.fullmatch(r"-?\d+", resolved.strip()):
+                            resolved = int(resolved.strip())
+                        elif re.fullmatch(r"-?\d+\.\d+", resolved.strip()):
+                            resolved = float(resolved.strip())
+                        else:
+                            math_result = self.handle_math(resolved)
+                            if math_result != resolved:
+                                resolved = math_result
+                    args[i] = resolved
+
+            if user_name is not None:
+                start_line2 = self.functions_start[user_name]
+                end_line2 = self.functions_end[user_name]
+                self.execute_script(start_line2, end_line2)
+                if self.flow == "return":
+                    self.flow = None
+                # A user function call inside an expression — hard to substitute
+                # a value here; bail out and let the caller handle it.
+                break
+
+            result = builtin(*args)
+            expr = expr[:match.start()] + str(result) + expr[match.end():]
+
+        return expr
+
     def handle_variable(self, value, line=0, scan_functions=True):
         # %Name% inside a larger string is expanded. A bare identifier
         # that is a known variable is resolved. Missing vars -> "".
@@ -2409,7 +2632,7 @@ class Playback(tk.Tk):
 
         # Update some variables if needed
         if "A_TickCount" in value:
-            self.builtin_variables["A_TickCount"] = time.perf_counter() * 1000
+            self.builtin_variables["A_TickCount"] = int(time.perf_counter() * 1000)
 
         if scan_functions:
             function_pattern = r'(?mi)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$'
@@ -2442,11 +2665,21 @@ class Playback(tk.Tk):
                                 inner,
                             )
                         else:
-                            resolved = self.handle_variable(arg, line, True)
-                            if isinstance(resolved, str) and re.fullmatch(r"-?\d+", resolved):
-                                resolved = int(resolved)
-                            elif isinstance(resolved, str) and re.fullmatch(r"-?\d+\.\d+", resolved):
-                                resolved = float(resolved)
+                            # Resolve any nested function calls inside the expression first
+                            resolved = self._resolve_embedded_calls(arg, line)
+
+                            resolved = self.handle_variable(resolved, line, True)
+
+                            if isinstance(resolved, str):
+                                if re.fullmatch(r"-?\d+", resolved.strip()):
+                                    resolved = int(resolved.strip())
+                                elif re.fullmatch(r"-?\d+\.\d+", resolved.strip()):
+                                    resolved = float(resolved.strip())
+                                else:
+                                    math_result = self.handle_math(resolved)
+                                    if math_result != resolved:
+                                        resolved = math_result
+
                             args[i] = resolved
                     return builtin(*args)
 
@@ -2461,6 +2694,9 @@ class Playback(tk.Tk):
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
             found = self._lookup_variable(stripped, None)
             return "" if found is None else str(found)
+
+        if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in "\"'":
+            return stripped[1:-1]
 
         return raw
 
@@ -3202,10 +3438,14 @@ class Playback(tk.Tk):
             if name.lower() == wanted:
                 return name
         return None
-
-    def _dispatch_hotkey(self, target):
-        """Run a hotkey target (label name or list of body lines) on the Tk thread."""
+    def _dispatch_hotkey(self, combo, target):
+        """Run a hotkey target in its own thread. Ignore the hotkey if it is already running."""
         if target is None or target == "":
+            return
+
+        # Do not start another thread if this hotkey is already running.
+        existing_thread = self._hotkey_threads.get(combo)
+        if existing_thread is not None and existing_thread.is_alive():
             return
 
         def run():
@@ -3216,18 +3456,34 @@ class Playback(tk.Tk):
                     label = self._lookup_label(str(target).strip())
                     if label is None:
                         return
+
                     start = self.labels_start[label]
                     end = self.labels_end[label]
-                    self.execute_script(start, end, self.script, True)
+
+                    self.execute_script(start, end, self.script)
+
                 if self.flow == "return":
                     self.flow = None
+
             except Exception:
                 pass
 
-        try:
-            self.after(0, run)
-        except Exception:
-            run()
+            finally:
+                # Only remove this hotkey's thread if it is still the
+                # thread registered for this combo.
+                current_thread = threading.current_thread()
+
+                if self._hotkey_threads.get(combo) is current_thread:
+                    self._hotkey_threads.pop(combo, None)
+
+        thread = threading.Thread(
+            target=run,
+            daemon=True
+        )
+
+        self._hotkey_threads[combo] = thread
+        thread.start()
+
 
     def on_key_press(self, key):
         """Dispatch a registered hotkey when a pynput key press matches a known binding."""
@@ -3239,22 +3495,336 @@ class Playback(tk.Tk):
             self._active_hotkey_modifiers.add(normalized)
             return
 
-        combo = self._canonical_hotkey(self._active_hotkey_modifiers, normalized)
+        combo = self._canonical_hotkey(
+            self._active_hotkey_modifiers,
+            normalized
+        )
+
         target = self.hotkeys.get(combo)
         if target is None:
             return
-        self._dispatch_hotkey(target)
+
+        self._dispatch_hotkey(combo, target)
+
 
     def on_key_release(self, key):
         """Clear active modifiers when a modifier key is released."""
         normalized = self._normalize_pynput_key(key)
         if normalized is None:
             return
+
         if normalized in self._MODIFIER_KEYS:
             self._active_hotkey_modifiers.discard(normalized)
 
+    def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
+        """
+        Send a keyboard event.
+        delay: Delay between send and release
+        click_type:
+            0 = click (press + release)   [default]
+            1 = hold (press only)
+            2 = release (release only)
+        """
+        key = str(key2)
+        backend = backend2.lower()
+        try:
+            delay = abs(float(delay2))
+        except:
+            delay = 0.1
+        if backend == "Input":
+            send_key(key, delay=delay, click_type=click_type)
+        elif backend == "Event":
+            # Convert Special Key Names
+            special_keys = {
+                "enter": Key.enter,
+                "return": Key.enter,
+                "tab": Key.tab,
+                "space": Key.space,
+                "esc": Key.esc,
+                "escape": Key.esc,
+                "backspace": Key.backspace,
+                "delete": Key.delete,
+                "up": Key.up,
+                "down": Key.down,
+                "left": Key.left,
+                "right": Key.right,
+            }
+            key = special_keys.get(key.lower(), key)
+            try:
+                if click_type == 0:
+                    keyboard_controller.press(key)
+                    time.sleep(delay)
+                    keyboard_controller.release(key)
+                elif click_type == 1:
+                    keyboard_controller.press(key)
+                elif click_type == 2:
+                    keyboard_controller.release(key)
+            except Exception as e:
+                print("Error sending keys:", e)
+        elif backend == "Play":
+            try:
+                if click_type == 0:
+                    pyautogui.keyDown(key)
+                    time.sleep(delay)
+                    pyautogui.keyUp(key)
+                elif click_type == 1:
+                    pyautogui.keyDown(key)
+                elif click_type == 2:
+                    pyautogui.keyUp(key)
+            except Exception as e:
+                print("Error sending keys with PyAutoGUI:", e)
+    def _click_at(self, x, y, backend, button="left", action="click", click_count=1):
+        if self.macro_running == False:
+            return
+
+        # Convert Coordinates If Needed (Retina Scaling)
+        if x is not None and y is not None:
+            if sys.platform == "darwin":
+                scale = get_scale_factor()
+                x = int(x / scale)
+                y = int(y / scale)
+        # Resolve Backend-Specific Button Names.
+        if backend == "Input":
+            # Separate Branches For Windows And macOS/Linux Mouse Events.
+            if sys.platform == "win32":
+                if x is not None and y is not None:
+                    windll.SetCursorPos(x, y)
+                    windll.mouse_event(MOUSEEVENTF_MOVE, 0, 1, 0, 0)
+                button_flags = {
+                    "left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+                    "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+                    "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+                }
+                down_flag, up_flag = button_flags.get(
+                    button,
+                    button_flags["left"]
+                )
+                if action == "down":
+                    windll.mouse_event(down_flag, 0, 0, 0, 0)
+                elif action == "up":
+                    windll.mouse_event(up_flag, 0, 0, 0, 0)
+                else:
+                    for i in range(click_count):
+                        windll.mouse_event(down_flag, 0, 0, 0, 0)
+                        windll.mouse_event(up_flag, 0, 0, 0, 0)
+                        if i < click_count - 1:
+                            time.sleep(0.03)
+            else:
+                if x is not None and y is not None:
+                    _move_mouse(x, y)
+                    _move_mouse(x + 2, y + 2)
+                    _move_mouse(x, y)
+                if action == "down":
+                    _mouse_event(button=button, press=True)
+                elif action == "up":
+                    _mouse_event(button=button, press=False)
+                else:
+                    for i in range(click_count):
+                        _mouse_event(button=button, press=True)
+                        _mouse_event(button=button, press=False)
+                        if i < click_count - 1:
+                            time.sleep(0.03)
+        elif backend == "Event":
+            if x is not None and y is not None:
+                mouse_controller.position = (x, y)
+            button_map = {
+                "left": mouse.Button.left,
+                "right": mouse.Button.right,
+                "middle": mouse.Button.middle,
+            }
+            mouse_button = button_map.get(
+                button,
+                mouse.Button.left
+            )
+            if action == "down":
+                mouse_controller.press(mouse_button)
+            elif action == "up":
+                mouse_controller.release(mouse_button)
+            else:
+                for i in range(click_count):
+                    mouse_controller.click(mouse_button)
+                    if i < click_count - 1:
+                        time.sleep(0.03)
+        elif backend == "Play":
+            if x is not None and y is not None:
+                pyautogui.moveTo(x, y)
+            if action == "down":
+                pyautogui.mouseDown(button=button)
+            elif action == "up":
+                pyautogui.mouseUp(button=button)
+            else:
+                for i in range(click_count):
+                    pyautogui.click(button=button)
+                    if i < click_count - 1:
+                        time.sleep(0.03)
+    def _cmd_send(self, action):
+        """
+        Parse AHK "Send" format into key, delay, and click type
+        Supports:
+        Send, 67
+        Send, D
+        Send, {Down}
+        Send, {W down}
+        Send, %Key%
+        SendMode, Event
+        """
+        try:
+            raw = "" if action is None else str(action).strip()
+            if "," in raw:
+                command, args = raw.split(",", 1)
+            else:
+                command, args = raw, ""
+            command = command.strip()
+            keys = args.strip()
+            cmd_lower = command.lower()
+
+            if cmd_lower == "sendmode":
+                backend = keys.split(",", 1)[0].strip()
+                backend = self._expand_percents(backend)
+                if backend:
+                    self.send_backend = backend
+                return
+
+            if cmd_lower == "sendinput":
+                backend = "Input"
+            elif cmd_lower == "sendevent":
+                backend = "Event"
+            elif cmd_lower == "sendplay":
+                backend = "Play"
+            else:
+                backend = getattr(self, "send_backend", "Event")
+
+            # Traditional Send: expand %Var%. A whole-token known variable
+            # (including a numeric one) is also resolved; a missing name such
+            # as D in "Send, D" stays the literal key.
+            keys = self._expand_percents(keys)
+            stripped = keys.strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
+                found = self._lookup_variable(stripped, None)
+                if found is not None:
+                    keys = str(found)
+
+            click_type = 0
+            brace = re.match(r"^\{(.+)\}$", str(keys).strip())
+            if brace:
+                inner = brace.group(1).strip()
+                inner_parts = inner.split()
+                if len(inner_parts) >= 2 and inner_parts[-1].lower() in ("down", "up"):
+                    click_type = 1 if inner_parts[-1].lower() == "down" else 2
+                    keys = " ".join(inner_parts[:-1])
+                else:
+                    keys = inner
+
+            self._send_key(keys, backend, self.key_delay, click_type)
+        except Exception:
+            pass
+
+        return
+
+    def _cmd_click(self, action):
+        """
+        Parse AHK Click syntax and pass the resolved values to _click_at().
+        Supported forms:
+          Click
+          Click, X, Y
+          Click, X, Y, Down
+          Click, X, Y, Up
+          Click, X, Y, Right
+          Click, X, Y, Down Right
+          Click, Down Right
+          Click, X, Y, Middle
+        """
+        try:
+            # Split Off The Command Name; Args May Be Empty
+            if "," in action:
+                _, args = action.split(",", 1)
+                parts = [p.strip() for p in args.split(",")]
+            else:
+                parts = []
+            coords = []
+            modifiers = []
+            click_modifiers = {
+                "right", "r", "left", "l", "middle", "m",
+                "down", "up", "rel", "relative",
+            }
+            # Extract Coordinates And Modifier Words.
+            # Resolve %Var% / identifiers / math before int() so
+            # Click, %X%, %Y% and Click, X, Y do not become modifiers.
+            for p in parts:
+                if not p:
+                    continue
+
+                words = p.split()
+                if words and all(word.lower() in click_modifiers for word in words):
+                    for word in words:
+                        modifiers.append(word.lower())
+                    continue
+
+                try:
+                    coords.append(self._resolve_number(p, as_int=True))
+                except (TypeError, ValueError):
+                    for word in p.split():
+                        modifiers.append(word.lower())
+            # Resolve X/Y.
+            if len(coords) >= 2:
+                x, y = coords[0], coords[1]
+            else:
+                x, y = None, None
+            # Resolve Button.
+            button = "left"
+            for word in modifiers:
+                if word in {"right", "r"}:
+                    button = "right"
+                elif word in {"middle", "m"}:
+                    button = "middle"
+                elif word in {"left", "l"}:
+                    button = "left"
+            # Resolve Action.
+            click_action = "click"
+            for word in modifiers:
+                if word == "down":
+                    click_action = "down"
+                elif word == "up":
+                    click_action = "up"
+            # Sendmode Determines The Backend Used By Click.
+            backend = self.send_backend
+            self._click_at(
+                x,
+                y,
+                backend,
+                button=button,
+                action=click_action
+            )
+        except Exception as e:
+            return e
+
+    def _cmd_sleep(self, action):
+        _, value = action.split(",", 1)
+        value = self.handle_variable(value)
+        ms = float(value.strip())   # float() accepts "400.0" and "400"
+        time.sleep((ms / 1000))
+    def _cmd_mousemove(self, action):
+        _, args = action.split(",", 1)
+        x, y = [int(v.strip()) for v in args.split(",")]
+        mouse_controller.position = (x, y)
+    def _cmd_mousegetpos(self, action):
+        # Ahk: Mousegetpos [, Outx, Outy]
+        try:
+            parts = []
+            if "," in action:
+                _, args = action.split(",", 1)
+                parts = [p.strip() for p in args.split(",")]
+            out_x = parts[0] if len(parts) > 0 else "MouseX"
+            out_y = parts[1] if len(parts) > 1 else "MouseY"
+            pos = mouse_controller.position
+            self.local_variables[out_x] = int(pos[0])
+            self.local_variables[out_y] = int(pos[1])
+            return 0
+        except Exception as e:
+            return e
+
 if __name__ == "__main__":
-    if open_mode == "Editor":
+    if open_mode == "Main Menu":
         app = MainGUI()
         app.mainloop()
     elif open_mode == "Playback":
