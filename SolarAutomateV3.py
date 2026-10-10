@@ -50,7 +50,8 @@ try:
 except:
     open_mode = "Main Menu"
     folder_path = os.getcwd()
-
+playback_path = "Solar Fishing Lite.ahk"
+open_mode = "Playback"
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
@@ -506,66 +507,55 @@ class MainGUI(tk.Tk):
             text="Overview",
             font=("Segoe UI", 9, "bold")
         ).place(x=10, y=10)
-
         # Compatibility Options
         compatibility_options = ttk.LabelFrame(
             self.overview_tab,
             text="Compatibility Options"
         )
         compatibility_options.place(x=10, y=30, width=300, height=150)
-
         ttk.Checkbutton(
             compatibility_options,
             text="Option 1"
         ).place(x=20, y=10)
-
         ttk.Checkbutton(
             compatibility_options,
             text="Option 2"
         ).place(x=20, y=40)
-
         ttk.Checkbutton(
             compatibility_options,
             text="Option 3"
         ).place(x=20, y=70)
-
         ttk.Checkbutton(
             compatibility_options,
             text="Option 4"
         ).place(x=20, y=100)
-
         # AHK Tools
         ahk_tools = ttk.LabelFrame(
             self.overview_tab,
             text="AHK Tools"
         )
         ahk_tools.place(x=320, y=30, width=300, height=150)
-
         tk.Button(
             ahk_tools,
             text="AHK Visual Editor",
             command=self.ahk_editor.show
         ).place(x=20, y=25, width=200)
-
         tk.Button(
             ahk_tools,
             text="AHK To Python",
             command=self.ahk_converter.show
         ).place(x=20, y=60, width=200)
-
         tk.Button(
             ahk_tools,
             text="Window Spy",
             command=self.window_spy.show
         ).place(x=20, y=95, width=200)
-
         # Solar Automate Links
         solar_links = ttk.LabelFrame(
             self.overview_tab,
             text="Solar Automate Links"
         )
         solar_links.place(x=10, y=190, width=300, height=120)
-
         tk.Button(
             solar_links,
             text="Join Solar Automate Discord",
@@ -573,7 +563,6 @@ class MainGUI(tk.Tk):
                 "https://discord.com/invite/aMZY8yrF8r"
             )
         ).place(x=20, y=25, width=240)
-
         tk.Button(
             solar_links,
             text="Upcoming Features",
@@ -581,14 +570,12 @@ class MainGUI(tk.Tk):
                 "https://docs.google.com/document/d/1WwWWMR-eN-R-GO42IioToHpWTgiXkLoiNE_4NeE-GsU/"
             )
         ).place(x=20, y=60, width=240)
-
         # AutoHotKey Links
         ahk_links = ttk.LabelFrame(
             self.overview_tab,
             text="AutoHotKey Links"
         )
         ahk_links.place(x=320, y=190, width=300, height=120)
-
         tk.Button(
             ahk_links,
             text="Using the Program",
@@ -596,7 +583,6 @@ class MainGUI(tk.Tk):
                 "https://www.autohotkey.com/docs/v2/Program.htm"
             )
         ).place(x=20, y=25, width=240)
-
         tk.Button(
             ahk_links,
             text="How to Write Hotkeys",
@@ -604,14 +590,12 @@ class MainGUI(tk.Tk):
                 "https://www.autohotkey.com/docs/v2/howto/WriteHotkeys.htm"
             )
         ).place(x=20, y=60, width=240)
-
         # More AHK Documentation
         ahk_docs = ttk.LabelFrame(
             self.overview_tab,
             text="AutoHotKey Documentation"
         )
         ahk_docs.place(x=10, y=320, width=610, height=150)
-
         tk.Button(
             ahk_docs,
             text="How to Send Keystrokes",
@@ -619,7 +603,6 @@ class MainGUI(tk.Tk):
                 "https://www.autohotkey.com/docs/v2/howto/SendKeys.htm"
             )
         ).place(x=20, y=25, width=240)
-
         tk.Button(
             ahk_docs,
             text="How to Run Programs",
@@ -627,7 +610,6 @@ class MainGUI(tk.Tk):
                 "https://www.autohotkey.com/docs/v2/howto/RunPrograms.htm"
             )
         ).place(x=320, y=25, width=240)
-
         tk.Button(
             ahk_docs,
             text="How to Manage Windows",
@@ -635,7 +617,6 @@ class MainGUI(tk.Tk):
                 "https://www.autohotkey.com/docs/v2/howto/ManageWindows.htm"
             )
         ).place(x=20, y=60, width=240)
-
         tk.Button(
             ahk_docs,
             text="Quick Reference",
@@ -643,14 +624,12 @@ class MainGUI(tk.Tk):
                 "https://www.autohotkey.com/docs/v2/"
             )
         ).place(x=320, y=60, width=240)
-
         # Help Files
         help_files = ttk.LabelFrame(
             self.overview_tab,
             text="Help"
         )
         help_files.place(x=10, y=480, width=610, height=55)
-
         tk.Button(
             help_files,
             text="Help Files",
@@ -1214,6 +1193,7 @@ class Ahk2Py:
             outfile.write("\n\n")
             outfile.writelines(runtime_end)
         return
+
 # AHK's Window Spy
 class WindowSpy:
     def __init__(self, master):
@@ -1269,6 +1249,7 @@ class Playback(tk.Tk):
         self._active_hotkey_modifiers = set()
         self.hotkey_listener = None  # retained for compatibility (unused; unified key_listener is used)
         self._hotkey_listener_started = False
+        self.max_hotkey_threads = 2 # AHK default
         # Start Unified Key Listener (Handles Both Recording Capture And Hotkey Dispatch)
         self.key_listener = KeyListener(on_press=self.on_key_press, on_release=self.on_key_release)
         self.key_listener.daemon = True
@@ -1303,6 +1284,12 @@ class Playback(tk.Tk):
         except:
             pass
 
+        # Capture Thread
+        if sys.platform == "darwin":
+            self.capture_thread = threading.Thread(target=self.capture_loop_quartz, daemon=True)
+        else:
+            self.capture_thread = threading.Thread(target=self.capture_loop_mss, daemon=True)
+        self.capture_thread.start()
         # Find Functions and Labels
         self.build_builtin_functions()
         self.find_functions()
@@ -1342,6 +1329,9 @@ class Playback(tk.Tk):
 
             if debug == True:
                 print("Processing: ", _script[line])
+            # Hashtag commands
+            if processed_line2.startswith("#"):
+                self._cmd_directives(processed_line)
             # if (Condition)
             # Keep function-call parentheses. Stripping every "(" / ")"
             # turned InStr(a, b) into InStr a, b and skipped handle_variable.
@@ -1401,7 +1391,6 @@ class Playback(tk.Tk):
                         loop_count = int(float(str(resolved).strip() or 0))
                     except (TypeError, ValueError):
                         loop_count = 0
-
                 # cmd_loop already runs the body loop_count times (or until Break).
                 # Jump past the matching } so the body is not run an extra time.
                 skip_until = self.cmd_loop(line, loop_count, _script)
@@ -1442,7 +1431,6 @@ class Playback(tk.Tk):
                 # Then evaluate arithmetic (including parentheses and chains)
                 # if the result is not already an integer.
                 variable_value = self.handle_variable(match.group(2))
-
                 # Keep an empty string as an empty string.
                 # Do not pass it through the math handler.
                 if variable_value != "":
@@ -1450,7 +1438,6 @@ class Playback(tk.Tk):
                         int(variable_value)
                     except (TypeError, ValueError):
                         variable_value = self.handle_math(variable_value)
-
                 self.local_variables[variable_name] = variable_value
                 # print(f"Variable Subsitution: {variable_name} := {variable_value} ({match.group(2)})")
             # VariableName .= Value
@@ -1482,9 +1469,9 @@ class Playback(tk.Tk):
                     pass
 
                 messagebox.showerror(f"MsgBox", f"{msgbox_text}")
-            if processed_line.startswith("pixelsearch"):
+            if processed_line2.startswith("pixelsearch"):
                 self.cmd_pixelsearch(processed_line)
-            if processed_line.startswith("pixelgetcolor"):
+            if processed_line2.startswith("pixelgetcolor"):
                 self._cmd_pixelgetcolor(processed_line)
             if processed_line2.startswith("send"):
                 self._cmd_send(processed_line)
@@ -1523,10 +1510,21 @@ class Playback(tk.Tk):
                 self.key_delay = int(parts[1])
             # Reload
             if processed_line2.startswith("reload"):
-                os.execv(sys.executable, [sys.executable] + sys.argv)
+                args = [sys.executable, f'"{sys.argv[0]}"'] + sys.argv[1:]
+                os.execv(sys.executable, args)
             # ExitApp
             if processed_line2.startswith("exitapp"):
                 self.destroy()
+    def _cmd_directives(self, line):
+        processed_line = line.replace("#", "")
+        #SingleInstance
+        if processed_line.startswith("SingleInstance"):
+            #SingleInstance Force
+            pass
+
+        #MaxThreadsPerHotkey
+        if processed_line.startswith("MaxThreadsPerHotkey"):
+            self.max_hotkey_threads = int(processed_line.replace("MaxThreadsPerHotkey", ""))
     def cmd_gui(self, line):
         # Define defaults
         arguments = [p.strip() for p in line.split(",")]
@@ -1699,7 +1697,10 @@ class Playback(tk.Tk):
         if arguments[1] == "Show":
             if self.gui_expand == True:
                 self.geometry(f"{self.gui_expansion_width}x{self.gui_expansion_height}")
-            self.deiconify
+            self.deiconify()
+        # Gui, Hide
+        elif arguments[1] == "Hide":
+            self.withdraw()
     # Update Style
     def update_style(self):
         style = ttk.Style()
@@ -1809,7 +1810,7 @@ class Playback(tk.Tk):
 
             else:
                 return string[start:string_len + length]
-            
+
         def WinExist(window=""):
             """
             AHK-compatible WinExist() expression function.
@@ -1819,6 +1820,7 @@ class Playback(tk.Tk):
             info = self._find_window(self.handle_variable(str(window)))
             if info is None:
                 return 0
+
             return info.get("hwnd", 0) or 0
 
         self.builtin_functions = {
@@ -1856,7 +1858,11 @@ class Playback(tk.Tk):
             _script = self.script
         else:
             _script = script
+        # Name:  (single colon). Hotkeys use :: and are handled below.
         label_pattern = r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:;.*)?$'
+        # Hotkey labels: F1::, ^!c::, $*#n::, F1 up::
+        # Not hotstrings (::btw:: / :*:btw::), which start with ':'.
+        hotkey_pattern = r'^\s*([^\s:;][^:;]*?)\s*::\s*(?:;.*)?$'
         function_pattern = r'(?mi)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\)\s*\{'
         def is_function_declaration(text):
             match = re.match(function_pattern, text)
@@ -1866,22 +1872,87 @@ class Playback(tk.Tk):
             # Don't treat control-flow as a function (if, while, loop, for, ...)
             return match.group(1).lower() not in CONTROL_KEYWORDS
 
-        for start_line, line in enumerate(_script):
-            match = re.match(label_pattern, line)
-            if not match:
-                continue
+        def is_label_line(text):
+            return re.match(label_pattern, text) is not None
 
-            label_name = match.group(1)
-            # A label continues through later labels and control-flow
-            # blocks. It ends at the next real function, or EOF.
+        def is_hotkey_line(text):
+            return re.match(hotkey_pattern, text) is not None
+
+        def next_boundary(from_line):
+            # A subroutine ends at the next label, hotkey label, or real function.
             end_line = len(_script)
-            for i in range(start_line + 1, len(_script)):
-                if is_function_declaration(_script[i]) or re.match(label_pattern, _script[i]):
+            for i in range(from_line + 1, len(_script)):
+                if (
+                    is_function_declaration(_script[i])
+                    or is_label_line(_script[i])
+                    or is_hotkey_line(_script[i])
+                ):
                     end_line = i
                     break
 
-            self.labels_start[label_name] = start_line
-            self.labels_end[label_name] = end_line
+            return end_line
+
+        def hotkey_trigger(name):
+            """Strip AHK hook/side prefixes so the key matches cmd_hotkey normalization."""
+            text = name.strip()
+            is_up = re.search(r'\s+up$', text, flags=re.IGNORECASE) is not None
+            if is_up:
+                text = re.sub(r'\s+up$', '', text, flags=re.IGNORECASE).strip()
+            # <> are left/right modifier marks; * $ ~ are hook/wildcard prefixes.
+            text = text.replace("<", "").replace(">", "")
+            text = re.sub(r'^[*~$]+', '', text)
+            return text, is_up
+
+        for start_line, line in enumerate(_script):
+            match = re.match(label_pattern, line)
+            if match:
+                label_name = match.group(1)
+                self.labels_start[label_name] = start_line
+                self.labels_end[label_name] = next_boundary(start_line)
+                continue
+
+            hot = re.match(hotkey_pattern, line)
+            if not hot:
+                continue
+
+            hotkey_name = hot.group(1).strip()
+            if not hotkey_name:
+                continue
+
+            # Stacked hotkeys (F1:: then F2::) share the body after the last one.
+            # labels_start is that last hotkey line so execute_script skips it
+            # and does not try to run the other hotkey headers.
+            body_anchor = start_line
+            j = start_line + 1
+            while j < len(_script):
+                nxt = _script[j].strip()
+                if nxt == "" or nxt.startswith(";"):
+                    j += 1
+                    continue
+
+                if is_hotkey_line(_script[j]):
+                    body_anchor = j
+                    j += 1
+                    continue
+
+                break
+
+            # Label name is the hotkey text (F1, ^!c). Dispatch looks this up
+            # the same way cmd_hotkey stores a label name in self.hotkeys.
+            label_name = hotkey_name
+            self.labels_start[label_name] = body_anchor
+            self.labels_end[label_name] = next_boundary(body_anchor)
+            key_for_norm, is_up = hotkey_trigger(hotkey_name)
+            normalized_key = self._normalize_hotkey_name(key_for_norm)
+            if not normalized_key:
+                continue
+
+            # Key-up labels are stored, but not on the press combo. on_key_press
+            # only looks up the press form, same as cmd_hotkey On.
+            if is_up:
+                self.hotkeys[normalized_key + " UP"] = label_name
+            else:
+                self.hotkeys[normalized_key] = label_name
     def find_functions(self, script=None):
         # Initialize Defaults
         if script == None:
@@ -1916,6 +1987,7 @@ class Playback(tk.Tk):
                 if braces == 0:
                     self.functions_end[function_name] = f"{function_scan_line}"
                     break
+
     def _unwrap_parens(self, value):
         """
         Strip wrapping ( ... ) pairs that enclose the whole string.
@@ -1931,9 +2003,11 @@ class Playback(tk.Tk):
                     if ch == quote:
                         quote = None
                     continue
+
                 if ch in "\"'":
                     quote = ch
                     continue
+
                 if ch == "(":
                     depth += 1
                 elif ch == ")":
@@ -1941,11 +2015,14 @@ class Playback(tk.Tk):
                     if depth == 0 and i != len(s) - 1:
                         wraps = False
                         break
+
                     if depth < 0:
                         wraps = False
                         break
+
             if not wraps or depth != 0:
                 break
+
             s = s[1:-1].strip()
         return s
 
@@ -1966,18 +2043,22 @@ class Playback(tk.Tk):
                     quote = None
                 i += 1
                 continue
+
             if ch in "\"'":
                 quote = ch
                 i += 1
                 continue
+
             if ch == "(":
                 depth += 1
                 i += 1
                 continue
+
             if ch == ")":
                 depth -= 1
                 i += 1
                 continue
+
             if depth == 0:
                 for op in ops:
                     if s.startswith(op, i):
@@ -1985,7 +2066,9 @@ class Playback(tk.Tk):
                         right = s[i + len(op):].strip()
                         if left != "" and right != "":
                             return left, op, right
+
                         break
+
             i += 1
         return None
 
@@ -1998,10 +2081,12 @@ class Playback(tk.Tk):
         raw = "" if token is None else str(token).strip()
         if raw == "":
             return ""
+
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
             inner = raw[1:-1]
             if "%" in inner:
                 return re.sub(
+
                     r"%([A-Za-z_][A-Za-z0-9_]*)%",
                     lambda m: (
                         "" if self._lookup_variable(m.group(1), None) is None
@@ -2010,21 +2095,27 @@ class Playback(tk.Tk):
                     inner,
                 )
             return inner
+
         return self.handle_variable(raw, line)
 
     def _if_truthy(self, value):
         """AHK v1: blank and 0 are false; anything else is true."""
         if value is None or value is False:
             return False
+
         if value is True:
             return True
+
         if isinstance(value, (int, float)):
             return value != 0
+
         text = str(value).strip()
         if text == "" or text == "0":
             return False
+
         try:
             return float(text) != 0
+
         except (TypeError, ValueError):
             return True
 
@@ -2034,15 +2125,12 @@ class Playback(tk.Tk):
             _script = self.script
         else:
             _script = script
-
         # Find the end of the IF block.
         braces = 0
         if_end = start_line
         same_line_else = False
-
         for scan_line in range(start_line, len(_script)):
             line = _script[scan_line]
-
             # Check for "} else {" on the same line.
             if scan_line > start_line and re.search(r'}\s*else\s*{', line):
                 if_end = scan_line
@@ -2051,7 +2139,6 @@ class Playback(tk.Tk):
 
             braces += line.count("{")
             braces -= line.count("}")
-
             if braces <= 0 and scan_line > start_line:
                 if_end = scan_line
                 break
@@ -2059,20 +2146,15 @@ class Playback(tk.Tk):
         # Find the ELSE block.
         else_start = None
         else_end = None
-
         if same_line_else:
             # The ELSE starts on the same line as the IF's closing brace.
             else_start = if_end
-
             # The "{" belonging to ELSE is on this same line.
             braces = 1
-
             for else_scan_line in range(if_end + 1, len(_script)):
                 line = _script[else_scan_line]
-
                 braces += line.count("{")
                 braces -= line.count("}")
-
                 if braces <= 0:
                     else_end = else_scan_line
                     break
@@ -2081,23 +2163,18 @@ class Playback(tk.Tk):
             # Check for an ELSE on the following line.
             for scan_line in range(if_end + 1, len(_script)):
                 line = _script[scan_line].strip()
-
                 # Ignore blank lines between IF and ELSE.
                 if not line:
                     continue
 
                 if re.match(r'(?mi)^else\b', line):
                     else_start = scan_line
-
                     # Find the end of the ELSE block.
                     braces = 0
-
                     for else_scan_line in range(else_start, len(_script)):
                         line = _script[else_scan_line]
-
                         braces += line.count("{")
                         braces -= line.count("}")
-
                         if braces <= 0 and else_scan_line > else_start:
                             else_end = else_scan_line
                             break
@@ -2107,7 +2184,6 @@ class Playback(tk.Tk):
         # Execute the correct block.
         if condition:
             self.execute_script(start_line, if_end, _script)
-
             # Skip the ELSE block.
             if else_end is not None:
                 return else_end
@@ -2139,6 +2215,7 @@ class Playback(tk.Tk):
         name = text.split(",", 1)[0].split(None, 1)[0].lower()
         if name in ("break", "continue", "return"):
             return name
+
         return None
 
     def cmd_loop(self, start_line, loop_count, script=None):
@@ -2371,6 +2448,7 @@ class Playback(tk.Tk):
             math_result = self.handle_math(resolved)
             try:
                 return float(math_result)
+
             except (TypeError, ValueError):
                 return 0.0
 
@@ -2383,13 +2461,13 @@ class Playback(tk.Tk):
         raw = "" if token is None else str(token).strip()
         if raw == "":
             return 0 if as_int else 0.0
+
         num = self._ahk_float(raw)
         return int(num) if as_int else num
 
     def _expand_percents(self, value):
         """Replace %Name% with the variable value (missing -> "")."""
         raw = "" if value is None else str(value)
-
         def repl(match):
             found = self._lookup_variable(match.group(1), None)
             return "" if found is None else str(found)
@@ -2404,18 +2482,17 @@ class Playback(tk.Tk):
         Unset identifiers become 0 (AHK v1 expression math).
         """
         expr = str(value)
-
         def replace_percent(match):
             name = match.group(1)
             return str(self._ahk_float(self._lookup_variable(name, "")))
 
         expr = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", replace_percent, expr)
-
         def replace_ident(match):
             name = match.group(0)
             found = self._lookup_variable(name, None)
             if found is not None:
                 return str(self._ahk_float(found))
+
             # AHK v1: unset/blank operands are 0 in expressions.
             return "0"
 
@@ -2423,8 +2500,10 @@ class Playback(tk.Tk):
         expr = expr.replace(" ", "")
         if not re.fullmatch(r"[\d.+\-*/()]+", expr or ""):
             return value
+
         try:
             return eval(expr, {"__builtins__": {}}, {})
+
         except Exception:
             return value
 
@@ -2539,26 +2618,29 @@ class Playback(tk.Tk):
         if name in self.builtin_functions:
             found = self.builtin_functions[name]
             return found if callable(found) else None
+
         lower = str(name).lower()
         for key, fn in self.builtin_functions.items():
             if key.lower() == lower and callable(fn):
                 return fn
+
         return None
 
     def _lookup_user_function(self, name):
         if name in self.functions_start and name in self.functions_end:
             return name
+
         lower = str(name).lower()
         for key in self.functions_start:
             if key.lower() == lower and key in self.functions_end:
                 return key
+
         return None
 
     def _resolve_embedded_calls(self, expr, line=0):
         """Replace any Func(args) substrings inside expr with their evaluated results."""
         # Match a function call anywhere in the string (not anchored to start/end)
         pattern = r'([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)'
-
         # Repeat until no more matches (handles nesting inside-out)
         while True:
             match = re.search(pattern, expr)
@@ -2568,10 +2650,8 @@ class Playback(tk.Tk):
             full = match.group(0)
             fname = match.group(1)
             params = match.group(2)
-
             user_name = self._lookup_user_function(fname)
             builtin = self._lookup_builtin_function(fname)
-
             if user_name is None and builtin is None:
                 # Not a known function — leave it alone to avoid infinite loop
                 break
@@ -2602,7 +2682,6 @@ class Playback(tk.Tk):
                             if math_result != resolved:
                                 resolved = math_result
                     args[i] = resolved
-
             if user_name is not None:
                 start_line2 = self.functions_start[user_name]
                 end_line2 = self.functions_end[user_name]
@@ -2615,7 +2694,6 @@ class Playback(tk.Tk):
 
             result = builtin(*args)
             expr = expr[:match.start()] + str(result) + expr[match.end():]
-
         return expr
 
     def handle_variable(self, value, line=0, scan_functions=True):
@@ -2629,11 +2707,9 @@ class Playback(tk.Tk):
 
         raw = str(value)
         stripped = raw.strip()
-
         # Update some variables if needed
         if "A_TickCount" in value:
             self.builtin_variables["A_TickCount"] = int(time.perf_counter() * 1000)
-
         if scan_functions:
             function_pattern = r'(?mi)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$'
             is_function_call = re.match(function_pattern, stripped)
@@ -2648,6 +2724,7 @@ class Playback(tk.Tk):
                     if self.flow == "return":
                         self.flow = None
                     return raw
+
                 builtin = self._lookup_builtin_function(function_name)
                 if builtin is not None:
                     args = self.split_args(parameters)
@@ -2667,9 +2744,7 @@ class Playback(tk.Tk):
                         else:
                             # Resolve any nested function calls inside the expression first
                             resolved = self._resolve_embedded_calls(arg, line)
-
                             resolved = self.handle_variable(resolved, line, True)
-
                             if isinstance(resolved, str):
                                 if re.fullmatch(r"-?\d+", resolved.strip()):
                                     resolved = int(resolved.strip())
@@ -2679,7 +2754,6 @@ class Playback(tk.Tk):
                                     math_result = self.handle_math(resolved)
                                     if math_result != resolved:
                                         resolved = math_result
-
                             args[i] = resolved
                     return builtin(*args)
 
@@ -2780,11 +2854,10 @@ class Playback(tk.Tk):
         elif command == "iniwrite":
             if len(parts) < 5:
                 raise SyntaxError(
+
                     f"{action}: IniWrite requires Value, Filename, Section, Key"
                 )
-
             value, filename, section, key = parts[1:5]
-
             # Resolve %Var% References
             value = self.handle_variable(value)
             filename = self.handle_variable(filename)
@@ -2797,15 +2870,12 @@ class Playback(tk.Tk):
                 section = self.handle_concat(section)
             if key.startswith("%"):
                 key = self.handle_concat(key)
-
             filename = filename.strip('"').strip("'")
             section = section.strip('"').strip("'")
             key = key.strip('"').strip("'")
-
             # Fix macOS paths
             if sys.platform != "win32":
                 filename = filename.replace("\\", "/")
-
             if os.path.exists(filename):
                 try:
                     lines = self.read_ini(filename)
@@ -2813,56 +2883,45 @@ class Playback(tk.Tk):
                     lines = []
             else:
                 lines = []
-
             found_section = False
             written = False
             output = []
-
             for line in lines:
                 stripped = line.strip()
-
                 # Section header
                 if stripped.startswith("[") and stripped.endswith("]"):
                     # We reached the next section without finding the key.
                     if found_section and not written:
                         output.append(f"{key}={value}\n")
                         written = True
-
                     current_section = stripped[1:-1]
                     found_section = (current_section == section)
-
                     output.append(line)
                     continue
 
                 # Existing key
                 if found_section and "=" in stripped:
                     k, _ = stripped.split("=", 1)
-
                     if k.strip() == key:
                         output.append(f"{key}={value}\n")
                         written = True
                         continue
 
                 output.append(line)
-
             # Section does not exist
             if not found_section:
                 if output and not output[-1].endswith("\n"):
                     output.append("\n")
-
                 output.append(f"[{section}]\n")
                 output.append(f"{key}={value}\n")
-
             # Section exists but key does not
             elif not written:
                 output.append(f"{key}={value}\n")
-
             try:
                 with open(filename, "w", encoding="utf-16") as f:
                     f.writelines(output)
             except Exception as e:
                 print(f"Failed to write INI file '{filename}': {e}")
-
             return
 
     def cmd_guicontrol(self, action):
@@ -2919,7 +2978,6 @@ class Playback(tk.Tk):
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             kernel32 = ctypes.windll.kernel32
             user32 = ctypes.windll.user32
-
             def win_owner(hwnd):
                 pid = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
@@ -2928,6 +2986,7 @@ class Playback(tk.Tk):
                 )
                 if not handle:
                     return "Unknown", ""
+
                 try:
                     size = wintypes.DWORD(260)
                     buf = ctypes.create_unicode_buffer(size.value)
@@ -2937,10 +2996,11 @@ class Playback(tk.Tk):
                         exe = os.path.basename(buf.value) or ""
                         owner = os.path.splitext(exe)[0] or "Unknown"
                         return owner, exe
+
                     return "Unknown", ""
+
                 finally:
                     kernel32.CloseHandle(handle)
-
             for window in gw.getAllWindows():
                 title = window.title or "<no title>"
                 hwnd = getattr(window, "_hWnd", None) or getattr(window, "_hwnd", None)
@@ -2970,7 +3030,6 @@ class Playback(tk.Tk):
                 Quartz.kCGWindowListExcludeDesktopElements | Quartz.kCGWindowListOptionOnScreenOnly,
                 Quartz.kCGNullWindowID
             )
-
             for window in window_list:
                 owner = window.get(Quartz.kCGWindowOwnerName, "Unknown") or "Unknown"
                 title = window.get(Quartz.kCGWindowName, "<no title>") or "<no title>"
@@ -2998,11 +3057,13 @@ class Playback(tk.Tk):
             prop = root.get_full_property(NET_CLIENT_LIST, X.AnyPropertyType)
             if not prop:
                 return
+
             for win_id in prop.value:
                 try:
                     window = disp.create_resource_object("window", win_id)
                 except Exception:
                     continue
+
                 title = None
                 try:
                     net_name = window.get_full_property(NET_WM_NAME, UTF8_STRING)
@@ -3011,6 +3072,7 @@ class Playback(tk.Tk):
                         title = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
                 except Exception:
                     pass
+
                 if not title:
                     try:
                         wm_name = window.get_wm_name()
@@ -3018,6 +3080,7 @@ class Playback(tk.Tk):
                             title = wm_name if isinstance(wm_name, str) else str(wm_name)
                     except Exception:
                         pass
+
                 if not title:
                     title = "<no title>"
                 owner = "Unknown"
@@ -3029,6 +3092,7 @@ class Playback(tk.Tk):
                             owner = comm.read().strip() or owner
                 except Exception:
                     pass
+
                 class_name = ""
                 class_instance = ""
                 try:
@@ -3040,6 +3104,7 @@ class Playback(tk.Tk):
                             owner = class_name or class_instance or owner
                 except Exception:
                     pass
+
                 left, top, width, height = 0, 0, 0, 0
                 try:
                     geom = window.get_geometry()
@@ -3051,6 +3116,7 @@ class Playback(tk.Tk):
                         left, top = geom.x, geom.y
                 except Exception:
                     pass
+
                 self.active_windows[owner] = title
                 self.window_list.append({
                     "hwnd": int(win_id),
@@ -3062,7 +3128,6 @@ class Playback(tk.Tk):
                     "width": width,
                     "height": height,
                 })
-
     def _parse_window_criteria(self, criteria):
         """
         Parse AHK-style window matching criteria.
@@ -3098,6 +3163,7 @@ class Playback(tk.Tk):
                 result["hwnd"] = int(m.group(1), 0)
             except ValueError:
                 pass
+
             remaining = remaining[:m.start()] + remaining[m.end():]
         title = remaining.strip()
         if title:
@@ -3143,6 +3209,7 @@ class Playback(tk.Tk):
         for info in self.window_list:
             if self._window_matches(info, criteria):
                 return info
+
         return None
 
     def win_exist(self, criteria=""):
@@ -3249,7 +3316,6 @@ class Playback(tk.Tk):
             self.local_variables[out_w] = info["width"]
         if out_h:
             self.local_variables[out_h] = info["height"]
-
     def get_screen_dpi(self):
         if sys.platform == "win32":
             try:
@@ -3301,11 +3367,13 @@ class Playback(tk.Tk):
         normalized_key = self._normalize_hotkey_name(key_name)
         if not normalized_key:
             return
+
         if state in ("on", "1", "true", "toggle"):
             self.hotkeys[normalized_key] = label_name
+            # print(f"{normalized_key}:: {label_name}")
         elif state in ("off", "0", "false"):
             self.hotkeys.pop(normalized_key, None)
-
+            # print(f"{normalized_key}:: None")
     def _normalize_pynput_key(self, key):
         """Convert a pynput key event to an AHK-style uppercase key name (F1, A, SPACE, etc.)."""
         try:
@@ -3412,7 +3480,6 @@ class Playback(tk.Tk):
 
     _MODIFIER_KEYS = {"CTRL", "ALT", "SHIFT", "LWIN", "RWIN"}
     _MODIFIER_ORDER = ("CTRL", "ALT", "SHIFT", "LWIN", "RWIN")
-
     def _canonical_hotkey(self, modifiers, main=""):
         """Build a stable CTRL+ALT+SHIFT+LWIN+KEY string for lookup."""
         present = {str(m).upper() for m in modifiers if m}
@@ -3423,21 +3490,27 @@ class Playback(tk.Tk):
         main = str(main).upper().strip() if main else ""
         if not main:
             return "+".join(mods)
+
         if not mods:
             return main
+
         return "+".join(mods + [main])
 
     def _lookup_label(self, label_name):
         """Find a label by exact name, then case-insensitive name."""
         if not label_name:
             return None
+
         if label_name in self.labels_start:
             return label_name
+
         wanted = str(label_name).lower()
         for name in self.labels_start:
             if name.lower() == wanted:
                 return name
+
         return None
+
     def _dispatch_hotkey(self, combo, target):
         """Run a hotkey target in its own thread. Ignore the hotkey if it is already running."""
         if target is None or target == "":
@@ -3451,7 +3524,7 @@ class Playback(tk.Tk):
         def run():
             try:
                 if isinstance(target, list):
-                    self.execute_script(0, len(target), target)
+                    self.execute_script(0, len(target), target, False)
                 else:
                     label = self._lookup_label(str(target).strip())
                     if label is None:
@@ -3459,12 +3532,9 @@ class Playback(tk.Tk):
 
                     start = self.labels_start[label]
                     end = self.labels_end[label]
-
-                    self.execute_script(start, end, self.script)
-
+                    self.execute_script(start, end, self.script, False)
                 if self.flow == "return":
                     self.flow = None
-
             except Exception:
                 pass
 
@@ -3472,19 +3542,14 @@ class Playback(tk.Tk):
                 # Only remove this hotkey's thread if it is still the
                 # thread registered for this combo.
                 current_thread = threading.current_thread()
-
                 if self._hotkey_threads.get(combo) is current_thread:
                     self._hotkey_threads.pop(combo, None)
-
         thread = threading.Thread(
             target=run,
             daemon=True
         )
-
         self._hotkey_threads[combo] = thread
         thread.start()
-
-
     def on_key_press(self, key):
         """Dispatch a registered hotkey when a pynput key press matches a known binding."""
         normalized = self._normalize_pynput_key(key)
@@ -3499,14 +3564,11 @@ class Playback(tk.Tk):
             self._active_hotkey_modifiers,
             normalized
         )
-
         target = self.hotkeys.get(combo)
         if target is None:
             return
 
         self._dispatch_hotkey(combo, target)
-
-
     def on_key_release(self, key):
         """Clear active modifiers when a modifier key is released."""
         normalized = self._normalize_pynput_key(key)
@@ -3515,7 +3577,188 @@ class Playback(tk.Tk):
 
         if normalized in self._MODIFIER_KEYS:
             self._active_hotkey_modifiers.discard(normalized)
+    def capture_loop_mss(self):
+        """Continuous capture loop for the macro."""
+        self.capture_id = 0
+        scale = get_scale_factor()
+        with MSS() as sct:
+            monitor = {
+                "top": 0,
+                "left": 0,
+                "width": int(SCREEN_WIDTH * scale),
+                "height": int(SCREEN_HEIGHT * scale),
+            }
+            while True:
+                if self.scan_delay < 1.0:
+                    self.scan_delay += 0.01
+                    self.capture_frame = np.asarray(sct.grab(monitor))[:, :, :3]
+                    self.capture_id += 1
+                time.sleep(self.scan_delay)
+    def capture_loop_quartz(self):
+        """Continuous capture loop for the macro (macOS)."""
+        self.capture_id = 0
+        while True:
+            if self.scan_delay < 1.0:
+                if sys.platform == "darwin":
+                    image = Quartz.CGWindowListCreateImage(
+                        Quartz.CGRectInfinite,
+                        Quartz.kCGWindowListOptionOnScreenOnly,
+                        Quartz.kCGNullWindowID,
+                        Quartz.kCGWindowImageDefault
+                    )
+                else:
+                    image = None
+                if image is None:
+                    time.sleep(0.01)
+                    continue
 
+                frame = cgimage_to_srgb_numpy(image)
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
+
+                self.scan_delay += 0.01
+                self.capture_frame = frame
+                self.capture_id += 1
+            time.sleep(self.scan_delay)
+
+    def ahk_hex_to_python(self, bgr_str):
+        # Remove '0x' or '0X' prefix and clean spaces
+        clean_str = bgr_str.lstrip("0x").lstrip("0X").strip()
+
+        # Extract BB, GG, RR parts
+        blue = clean_str[0:2]
+        green = clean_str[2:4]
+        red = clean_str[4:6]
+
+        # Reorder to RRGGBB with '#'
+        return f"#{red.upper()}{green.upper()}{blue.upper()}"
+
+    def bgr_to_python(b, g, r):
+        return f"#{r:02X}{g:02X}{b:02X}"
+
+    def pixel_search(self, frame, hex, tolerance, mode=0):
+        """
+        Searches for the first or last pixel based on mode.
+        Mode 0: First pixel; Mode 1: Last pixel
+        """
+        if frame is None or frame.size == 0:
+            return None, None
+
+        if mode not in (0, 1):
+            raise RuntimeError("Invalid detection mode")
+
+        # Convert Tolerance To Int First, Handling String Inputs
+        try:
+            tolerance = int(tolerance)
+        except (ValueError, TypeError):
+            tolerance = 0  # or some default value
+        # Failsafe: None Hex
+        if hex is None:
+            return None, None
+
+        try:
+            tolerance = int(np.clip(tolerance, 0, 255))
+            b, g, r = self._hex_to_bgr(hex)
+            target = np.array([b, g, r], dtype=np.int32)
+            frame_i = frame.astype(np.int32)
+            diff = frame_i - target
+            mask = np.sqrt(np.sum(diff ** 2, axis=-1)) <= tolerance
+            coords = np.argwhere(mask)
+            if coords.size > 0:
+                if mode == 0:
+                    y, x = coords[0]
+                else:
+                    y, x = coords[-1]
+                return int(x), int(y)
+
+        except:
+            return None, None
+
+        return None, None
+    def pixel_get_color(self, frame, x, y):
+        """
+        Returns the color at the specified pixel coordinates.
+        
+        Args:
+            frame: The image/frame to read from (numpy array)
+            x: X coordinate (column)
+            y: Y coordinate (row)
+        
+        Returns:
+            Tuple of (b, g, r) values if successful, None otherwise
+        """
+        if frame is None or frame.size == 0:
+            return None, None, None
+        
+        try:
+            x = int(x)
+            y = int(y)
+            
+            # Get frame dimensions
+            height, width = frame.shape[:2]
+            
+            # Bounds check
+            if x < 0 or x >= width or y < 0 or y >= height:
+                return None, None, None
+            
+            # Extract pixel color (BGR format)
+            pixel = frame[y, x]
+            
+            # Handle both color and grayscale images
+            if len(pixel.shape) == 0:  # Grayscale
+                b = g = r = int(pixel)
+            else:
+                b, g, r = int(pixel[0]), int(pixel[1]), int(pixel[2])
+            
+            return b, g, r
+        
+        except (ValueError, TypeError, IndexError):
+            return None, None, None
+    def cmd_pixelsearch(self, line):
+        # Process Line
+        self.scan_delay = 0.01
+        _, args = line.split(",", 1)
+        arguments = [p.strip() for p in args.split(",")]
+        
+        # 1. Convert coordinate arguments to integers safely
+        x1 = int(arguments[2])
+        y1 = int(arguments[3])
+        x2 = int(arguments[4])
+        y2 = int(arguments[5])
+        
+        # 2. Handle search mode properly (keeping it within 0 or 1 as pixel_search expects)
+        search_mode = 0
+        if x1 > x2 or y1 > y2:
+            search_mode = 1  # Last pixel mode
+            
+        # 3. Use the integer coordinates for slicing
+        left = min(x1, x2)
+        top = min(y1, y2)
+        right = max(x1, x2)
+        bottom = max(y1, y2)
+        
+        img = self.capture_frame[top:bottom, left:right]
+        color = self.bgr_to_hex(arguments[6])
+        tolerance = arguments[7]  # pixel_search handles int conversion internally
+        
+        x, y = self.pixel_search(img, color, tolerance, search_mode)
+        
+        # Adjust x, y back to global frame coordinates if needed, 
+        # depending on whether pixel_search returns local or global offsets.
+        self.local_variables[arguments[0]] = x + left
+        self.local_variables[arguments[1]] = y + top
+    def cmd_pixelgetcolor(self, line):
+        # Process Line
+        self.scan_delay = 0.01
+        _, args = line.split(",", 1)
+        arguments = [p.strip() for p in args.split(",")]
+        x = int(arguments[1])
+        y = int(arguments[2])
+
+        b, g, r = self.pixel_get_color(self.capture_frame, x, y)
+        hex = self.bgr_to_python(b, g, r)
+        self.local_variables[arguments[0]] = hex
     def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
         """
         Send a keyboard event.
@@ -3574,9 +3817,6 @@ class Playback(tk.Tk):
             except Exception as e:
                 print("Error sending keys with PyAutoGUI:", e)
     def _click_at(self, x, y, backend, button="left", action="click", click_count=1):
-        if self.macro_running == False:
-            return
-
         # Convert Coordinates If Needed (Retina Scaling)
         if x is not None and y is not None:
             if sys.platform == "darwin":
@@ -3677,7 +3917,6 @@ class Playback(tk.Tk):
             command = command.strip()
             keys = args.strip()
             cmd_lower = command.lower()
-
             if cmd_lower == "sendmode":
                 backend = keys.split(",", 1)[0].strip()
                 backend = self._expand_percents(backend)
@@ -3693,7 +3932,6 @@ class Playback(tk.Tk):
                 backend = "Play"
             else:
                 backend = getattr(self, "send_backend", "Event")
-
             # Traditional Send: expand %Var%. A whole-token known variable
             # (including a numeric one) is also resolved; a missing name such
             # as D in "Send, D" stays the literal key.
@@ -3703,7 +3941,6 @@ class Playback(tk.Tk):
                 found = self._lookup_variable(stripped, None)
                 if found is not None:
                     keys = str(found)
-
             click_type = 0
             brace = re.match(r"^\{(.+)\}$", str(keys).strip())
             if brace:
@@ -3714,7 +3951,6 @@ class Playback(tk.Tk):
                     keys = " ".join(inner_parts[:-1])
                 else:
                     keys = inner
-
             self._send_key(keys, backend, self.key_delay, click_type)
         except Exception:
             pass
@@ -3820,6 +4056,7 @@ class Playback(tk.Tk):
             self.local_variables[out_x] = int(pos[0])
             self.local_variables[out_y] = int(pos[1])
             return 0
+
         except Exception as e:
             return e
 
