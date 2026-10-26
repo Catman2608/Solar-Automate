@@ -50,7 +50,7 @@ try:
 except:
     open_mode = "Main Menu"
     folder_path = os.getcwd()
-playback_path = "Solar Fishing Lite.ahk"
+playback_path = "test.ahk"
 open_mode = "Playback"
 # Other functions and classes
 def open_link(url):
@@ -239,18 +239,36 @@ if sys.platform == "win32":
                 return value
 
         return None
-
-# macOS (Keyboard, scale factor, mouse button)
+# macOS (Keyboard, Scale Factor, Mouse Button, ScreenCaptureKit)
 elif sys.platform == "darwin":
     _scale_cache = None
-    LEFT_BUTTON = 0
     MAC_KEY_MAP = {
         "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
         "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20,
-        "4": 21, "6": 22, "5": 23, "equal": 24, "9": 25, "7": 26, "minus": 27, "8": 28, "0": 29, "o": 31,
-        "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "semicolon": 41, "comma": 43, "slash": 44, "n": 45,
-        "m": 46, "period": 47, "space": 49, "return": 36, "enter": 76, "tab": 48, "escape": 53,
+        "4": 21, "6": 22, "5": 23, "equal": 24, "9": 25, "7": 26, "minus": 27, "-": 27, "8": 28, "0": 29, "o": 31,
+        "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "'": 39, "quote": 39, "apostrophe": 39, "k": 40, "semicolon": 41, "comma": 43, "slash": 44, "n": 45,
+        "m": 46, "period": 47, "space": 49, "return": 36, "enter": 76, "tab": 48, "backspace": 51, "delete": 51, "escape": 53,
+        "command": 55, "cmd": 55, "shift": 56, "option": 58, "alt": 58, "control": 59, "ctrl": 59,
     }
+    _QUARTZ_KEY_SOURCE = None
+    def get_taskbar_height():
+        return 0
+    def _get_quartz_key_source():
+        # Private Source So Posted Keys Do Not Inherit Hardware Command/Fn/Globe State
+        global _QUARTZ_KEY_SOURCE
+        if _QUARTZ_KEY_SOURCE is None:
+            _QUARTZ_KEY_SOURCE = Quartz.CGEventSourceCreate(
+                Quartz.kCGEventSourceStatePrivate
+            )
+            try:
+                Quartz.CGEventSourceSetLocalEventsSuppressionInterval(
+                    _QUARTZ_KEY_SOURCE, 0.0
+                )
+            except Exception:
+                pass
+
+        return _QUARTZ_KEY_SOURCE
+
     def get_scale_factor():
         global _scale_cache
         if _scale_cache is not None:
@@ -272,6 +290,16 @@ elif sys.platform == "darwin":
         point = Quartz.CGPointMake(x, y)
         Quartz.CGWarpMouseCursorPosition(point)
         Quartz.CGAssociateMouseAndMouseCursorPosition(True)
+    def _warp_mouse(x, y):
+        """
+        Instantly warps the mouse cursor to the given (x, y) coordinates
+        without generating mouse-motion events.
+        """
+        # Define the target point
+        point = Quartz.CGPointMake(float(x), float(y))
+        event = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, point, Quartz.kCGMouseButtonLeft)
+        # Warp the cursor
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
     def _mouse_event(button="left", press=True, x=None, y=None):
         """Unified cross-platform mouse event.
         button: 'left'/'right'/'middle' or 1/2/3
@@ -279,7 +307,7 @@ elif sys.platform == "darwin":
         """
         if x is None or y is None:
             x, y = get_mouse_position()
-        # Map button → (Quartz button constant, down event, up event)
+        # Map Button → (Quartz Button Constant, Down Event, Up Event)
         button_map = {
             "left":   (Quartz.kCGMouseButtonLeft, Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp),
             1:        (Quartz.kCGMouseButtonLeft, Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp),
@@ -300,49 +328,55 @@ elif sys.platform == "darwin":
             btn
         )
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
-    def send_key(key, delay=0.05, click_type=0):
+    def send_key(key, delay=0.05, click_type=0, flags=0):
         """
         Send a keyboard event.
         click_type:
             0 = click (press + release)   [default]
             1 = hold (press only)
             2 = release (release only)
+        flags: Quartz modifier mask. Default 0 so Globe/Fn is never inherited.
         """
         keycode = MAC_KEY_MAP.get(str(key).lower())
         if keycode is None:
             return
 
-        if click_type == 0:           # Click (press + release)
-            Quartz.CGEventPost(
-                Quartz.kCGHIDEventTap,
-                Quartz.CGEventCreateKeyboardEvent(None, keycode, True)   # key down
-            )
-            time.sleep(delay)
-            Quartz.CGEventPost(
-                Quartz.kCGHIDEventTap,
-                Quartz.CGEventCreateKeyboardEvent(None, keycode, False)  # key up
-            )
-        elif click_type == 1:         # Hold (press only)
-            Quartz.CGEventPost(
-                Quartz.kCGHIDEventTap,
-                Quartz.CGEventCreateKeyboardEvent(None, keycode, True)   # key down
-            )
+        source = _get_quartz_key_source()
+        def _post_key(down):
+            event = Quartz.CGEventCreateKeyboardEvent(source, keycode, down)
+            if event is None:
+                return
+
+            # Explicit Flags Only. A Null Source Inherits Combined Session Flags,
+            # Often Including Globe/Fn. Two Letters Then Look Like A Double
+            # Globe Tap And macOS Opens Siri / Type To Siri / Dictation.
+            Quartz.CGEventSetFlags(event, flags or 0)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        if click_type == 1:           # Hold (press only)
+            _post_key(True)
         elif click_type == 2:         # Release only
-            Quartz.CGEventPost(
-                Quartz.kCGHIDEventTap,
-                Quartz.CGEventCreateKeyboardEvent(None, keycode, False)  # key up
-            )
-        else:
-            # Fallback to normal click if invalid value is passed
-            Quartz.CGEventPost(
-                Quartz.kCGHIDEventTap,
-                Quartz.CGEventCreateKeyboardEvent(None, keycode, True)
-            )
+            _post_key(False)
+        else:                         # Click (press + release)
+            _post_key(True)
             time.sleep(delay)
-            Quartz.CGEventPost(
-                Quartz.kCGHIDEventTap,
-                Quartz.CGEventCreateKeyboardEvent(None, keycode, False)
-            )
+            _post_key(False)
+    def send_hotkey(modifier, key, delay=0.05):
+        """Modifier Down, Key Click With That Flag, Modifier Up."""
+        flag_map = {
+            "command": Quartz.kCGEventFlagMaskCommand,
+            "cmd": Quartz.kCGEventFlagMaskCommand,
+            "shift": Quartz.kCGEventFlagMaskShift,
+            "option": Quartz.kCGEventFlagMaskAlternate,
+            "alt": Quartz.kCGEventFlagMaskAlternate,
+            "control": Quartz.kCGEventFlagMaskControl,
+            "ctrl": Quartz.kCGEventFlagMaskControl,
+        }
+        flag = flag_map.get(str(modifier).lower(), 0)
+        send_key(modifier, click_type=1, flags=flag)
+        time.sleep(0.02)
+        send_key(key, delay=delay, flags=flag)
+        time.sleep(0.02)
+        send_key(modifier, click_type=2, flags=0)
 # Linux (Mouse positions and Xdisplay)
 elif sys.platform.startswith("linux"):
     _xdisplay = None
@@ -1219,15 +1253,32 @@ class WindowSpy:
 # AHK playback
 class Playback(tk.Tk):
     def __init__(self, playback_path):
-        # Initialization
         super().__init__()
+
+        
+        # 1. Window & Basic Geometry Setup
+        
+        script_full = os.path.abspath(playback_path)
         self.geometry("300x300")
         self.title(str(playback_path).replace(str(BASE_PATH), ""))
-        # Read File
+        
+        try:
+            style = ttk.Style()
+            style.theme_use("clam")
+            style.configure("TNotebook.Tab", padding=(0, 0, 0, 0))
+        except Exception:
+            pass
+
+        
+        # 2. File Loading & Script Parsing
+        
         with open(playback_path, "r", encoding="utf-8-sig") as f:
             self.script_text = f.read()
         self.script = self.script_text.splitlines()
-        # Other GUI constants
+
+        
+        # 3. GUI State & Constants
+        
         self.tabs = []
         self.tab_frames = []
         self.color = "Black"
@@ -1237,27 +1288,50 @@ class Playback(tk.Tk):
         self.tab_offset_x = 0
         self.tab_offset_y = 0
         self.loop_end = 0
+        self.key_delay = 100
+        self.send_backend = "Event"
+        
+        # GUI Registry Dictionaries
         self.gui_variables = {}
         self.gui_controls = {}
+        self.gui_placements = {}
+        self.gui_place_info = {}
+        self.gui_objects = {}
+        self.active_windows = {}
+        
+        # GUI Expansion & Performance Settings
         self.gui_expand = False
         self.gui_expansion_width = 300
         self.gui_expansion_height = 300
+        self.scan_delay = 1
+        self.font_bold = False
+        # Save and Load Cache (optimization)
+        self.load_cache = {}
+        self.save_cache = []
+        self.cached_file = ""
+        
+        # 4. Hotkey & Listener Setup
+        
         # Unified Hotkey Registry: Normalized_Key -> Label_Name (Str) Or Body Lines (List)
-        # Presence In The Dict Means The Hotkey Is Enabled. Hotkey, ..., Off Deletes The Entry.
+        # Presence in the dict means the hotkey is enabled. Hotkey, ..., off deletes the entry.
         self.hotkeys = {}
         self._hotkey_threads = {}
         self._active_hotkey_modifiers = set()
-        self.hotkey_listener = None  # retained for compatibility (unused; unified key_listener is used)
+        self.hotkey_listener = None  # Retained for compatibility (unused; unified key_listener is used)
         self._hotkey_listener_started = False
-        self.max_hotkey_threads = 2 # AHK default
+        self.max_hotkey_threads = 2  # AHK default
+
         # Start Unified Key Listener (Handles Both Recording Capture And Hotkey Dispatch)
         self.key_listener = KeyListener(on_press=self.on_key_press, on_release=self.on_key_release)
         self.key_listener.daemon = True
         self.key_listener.start()
-        self.active_windows = {}
-        script_full = os.path.abspath(playback_path)
+
+        
+        # 5. Environment & Built-in Variables
+        
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
+        
         self.builtin_variables = {
             "A_ScreenWidth": screen_width,
             "A_ScreenHeight": screen_height,
@@ -1269,6 +1343,7 @@ class Playback(tk.Tk):
             "A_Space": " ",
             "A_Tab": "\t",
         }
+        
         self.builtin_functions = {}
         self.functions_start = {}
         self.functions_end = {}
@@ -1276,27 +1351,26 @@ class Playback(tk.Tk):
         self.labels_end = {}
         self.local_variables = {}
         self.flow = None
-        self.font_bold = False
-        try:
-            style = ttk.Style()
-            style.theme_use("clam")
-            style.configure("TNotebook.Tab", padding=(0, 0, 0, 0))
-        except:
-            pass
 
-        # Capture Thread
+        
+        # 6. Background Threads
+        
         if sys.platform == "darwin":
             self.capture_thread = threading.Thread(target=self.capture_loop_quartz, daemon=True)
         else:
             self.capture_thread = threading.Thread(target=self.capture_loop_mss, daemon=True)
         self.capture_thread.start()
-        # Find Functions and Labels
+
+        
+        # 7. Script Compilation & Execution
+        
         self.build_builtin_functions()
         self.find_functions()
         self.find_labels()
-        # Main Loop
+        print(self.hotkeys)
+        
+        # Main Execution & Window Loop
         self.execute_script(-1, len(self.script))
-        self.withdraw
         self.mainloop()
     def execute_script(self, start_line, end_line, _script=None, debug=False):
         # Initialize Defaults
@@ -1308,7 +1382,7 @@ class Playback(tk.Tk):
         start = int(start_line)
         end = int(end_line)
         # Start Macro
-        for line, processed_line in enumerate(_script):
+        for line, current_line in enumerate(_script):
             if self.flow:
                 break
 
@@ -1318,11 +1392,12 @@ class Playback(tk.Tk):
             if line >= end:
                 break
 
-            processed_line2 = processed_line.lower().replace("    ", "")
-            if processed_line.startswith(";") or processed_line.strip() == "":
+            processed_line = current_line.lower().lstrip()
+            next_line = _script[line + 1] if line + 1 < len(_script) else ""
+            if current_line.startswith(";") or current_line.strip() == "":
                 continue
 
-            flow = self._flow_command(processed_line2)
+            flow = self._flow_command(processed_line)
             if flow:
                 self.flow = flow
                 break
@@ -1330,13 +1405,13 @@ class Playback(tk.Tk):
             if debug == True:
                 print("Processing: ", _script[line])
             # Hashtag commands
-            if processed_line2.startswith("#"):
-                self._cmd_directives(processed_line)
+            if processed_line.startswith("#"):
+                self._cmd_directives(current_line)
             # if (Condition)
             # Keep function-call parentheses. Stripping every "(" / ")"
             # turned InStr(a, b) into InStr a, b and skipped handle_variable.
             if_pattern = r'(?mi)^\s*if\s+(.+?)\s*$'
-            is_if = re.match(if_pattern, processed_line)
+            is_if = re.match(if_pattern, current_line)
             if is_if:
                 condition = is_if.group(1).strip()
                 if condition.endswith("{"):
@@ -1369,7 +1444,7 @@ class Playback(tk.Tk):
 
             # Loop, Files, Directory
             loop_files_pattern = r'(?mi)^\s*Loop\s*,\s*Files\s*,\s*(.*?)(?:\s*,\s*(.*?))?\s*\{'
-            is_loop_files = re.match(loop_files_pattern, processed_line)
+            is_loop_files = re.match(loop_files_pattern, current_line)
             if is_loop_files:
                 file_pattern = is_loop_files.group(1).strip()
                 mode = is_loop_files.group(2)
@@ -1380,7 +1455,7 @@ class Playback(tk.Tk):
             # Loop { ... } is infinite. Loop, N { ... } runs N times.
             # N may be a literal or a %Var% / identifier resolved at runtime.
             loop_pattern = r'(?mi)^\s*Loop(?:\s*,\s*(.+?))?\s*\{'
-            is_loop = re.match(loop_pattern, processed_line)
+            is_loop = re.match(loop_pattern, current_line)
             if is_loop:
                 raw_count = is_loop.group(1)
                 if raw_count is None or str(raw_count).strip() == "":
@@ -1397,13 +1472,13 @@ class Playback(tk.Tk):
                 continue
 
             # GoSub, LabelName
-            if processed_line2.startswith("gosub"):
-                gosub = self.cmd_gosub(processed_line)
+            if processed_line.startswith("gosub"):
+                gosub = self.cmd_gosub(current_line)
                 if gosub != 0:
                     messagebox.showerror(f"Error at line {line + 1}", f"Error at line {line + 1}\nMissing Label: {gosub}")
             # FunctionName(Parameters)
             function_pattern = r'(?mi)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\)\s*'
-            is_function_call = re.match(function_pattern, processed_line)
+            is_function_call = re.match(function_pattern, current_line)
             if is_function_call:
                 function_name = is_function_call.group(1)
                 parameters = is_function_call.group(2)
@@ -1422,29 +1497,87 @@ class Playback(tk.Tk):
                     else:
                         print(traceback.format_exc())
                         messagebox.showerror(f"Error at line {line + 1}", f"Error at line {line + 1}\nMissing Function: {e}")
+
             # VariableName := Value
-            variable_assignment_pattern = r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*(.*?)\s*$'
-            match = re.match(variable_assignment_pattern, processed_line)
+            # VariableName += Value
+            # VariableName -= Value
+            # VariableName *= Value
+            # VariableName /= Value
+
+            variable_assignment_pattern = (
+                r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*'
+                r'(:=|\+=|-=|\*=|/=)\s*(.*?)\s*$'
+            )
+
+            match = re.match(variable_assignment_pattern, current_line)
+
             if match:
                 variable_name = match.group(1)
-                # Resolve functions / %Var% / bare identifiers first.
-                # Then evaluate arithmetic (including parentheses and chains)
-                # if the result is not already an integer.
-                variable_value = self.handle_variable(match.group(2))
-                # Keep an empty string as an empty string.
-                # Do not pass it through the math handler.
-                if variable_value != "":
+                operator = match.group(2)
+                raw_value = match.group(3)
+
+                # Resolve functions, %Var%, and bare identifiers.
+                variable_value = self.handle_variable(raw_value)
+
+                if operator == ':=':
+                    # Preserve empty strings for normal assignment.
+                    if variable_value != "":
+                        try:
+                            int(variable_value)
+                        except (TypeError, ValueError):
+                            variable_value = self.handle_math(variable_value)
+
+                    self.local_variables[variable_name] = variable_value
+
+                else:
+                    # Compound assignments require an existing variable.
+                    if variable_name not in self.local_variables:
+                        raise NameError(
+                            f"Variable '{variable_name}' is not defined"
+                        )
+
+                    current_value = self.local_variables[variable_name]
+
+                    # Convert both operands to numbers.
                     try:
-                        int(variable_value)
+                        left = float(current_value)
+                        right = float(variable_value)
                     except (TypeError, ValueError):
-                        variable_value = self.handle_math(variable_value)
-                self.local_variables[variable_name] = variable_value
-                # print(f"Variable Subsitution: {variable_name} := {variable_value} ({match.group(2)})")
+                        raise TypeError(
+                            f"Cannot apply {operator} to "
+                            f"'{current_value}' and '{variable_value}'"
+                        )
+
+                    if operator == '+=':
+                        result = left + right
+                    elif operator == '-=':
+                        result = left - right
+                    elif operator == '*=':
+                        result = left * right
+                    elif operator == '/=':
+                        if right == 0:
+                            raise ZeroDivisionError("Division by zero")
+                        result = left / right
+                    else:
+                        raise RuntimeError(
+                            f"Unsupported assignment operator: {operator}"
+                        )
+
+                    # Preserve integer results when both operands are integers.
+                    if (
+                        isinstance(current_value, int)
+                        or str(current_value).lstrip('-').isdigit()
+                    ) and str(variable_value).lstrip('-').isdigit():
+                        if result.is_integer():
+                            result = int(result)
+
+                    self.local_variables[variable_name] = result
+
             # VariableName .= Value
             # AHK v1: same as Var := Var . Value (expression).
             # FileName "|"  ->  FileName . "|"
             variable_append_pattern = r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\.\=\s*(.*?)\s*$'
-            match = re.match(variable_append_pattern, processed_line)
+            match = re.match(variable_append_pattern, current_line)
             if match:
                 variable_name = match.group(1)
                 variable_value = self.handle_concat(match.group(2))
@@ -1453,67 +1586,111 @@ class Playback(tk.Tk):
                     str(current_value) + str(variable_value)
                 )
             # SplitPath, InputVar, OutFileName, OutDir, OutExtension, OutNameNoExt, OutDrive
-            if processed_line2.startswith("splitpath"):
-                self.cmd_splitpath(processed_line)
-            # MsgBox, Text
-            if processed_line2.startswith("msgbox"):
-                arguments = [p.strip() for p in processed_line.split(",")]
-                msgbox_text = self.handle_variable(arguments[1], line)
-                try:
-                    int(float(arguments[1]))
-                except:
-                    msgbox_text = self.handle_math(msgbox_text)
-                try:
-                    msgbox_text = msgbox_text.replace("`n", "\n")
-                except:
-                    pass
+            if processed_line.startswith("splitpath"):
+                self.cmd_splitpath(current_line)
 
-                messagebox.showerror(f"MsgBox", f"{msgbox_text}")
-            if processed_line2.startswith("pixelsearch"):
-                self.cmd_pixelsearch(processed_line)
-            if processed_line2.startswith("pixelgetcolor"):
-                self._cmd_pixelgetcolor(processed_line)
-            if processed_line2.startswith("send"):
-                self._cmd_send(processed_line)
-            if processed_line2.startswith("click"):
-                self._cmd_click(processed_line)
-            if processed_line2.startswith("sleep"):
-                self._cmd_sleep(processed_line)
-            if processed_line2.startswith("mousemove"):
-                self._cmd_mousemove(processed_line)
-            if processed_line2.startswith("mousegetpos"):
-                error = self._cmd_mousegetpos(processed_line)
+            # MsgBox, Options, Title, Text
+            if processed_line.startswith("msgbox"):
+                arguments = [p.strip() for p in current_line.split(",", 3)]
+
+                # Default values
+                msgbox_options = ""
+                msgbox_title = "MsgBox"
+                msgbox_text = ""
+
+                if len(arguments) > 1:
+                    msgbox_options = arguments[1]
+
+                if len(arguments) > 2:
+                    msgbox_title = arguments[2]
+
+                if len(arguments) > 3:
+                    msgbox_text = arguments[3]
+
+                # Handle Variable
+                msgbox_text = self.handle_string_variables(msgbox_text)
+
+                # Handle Math
+                try:
+                    int(float(msgbox_text))
+                except (ValueError, TypeError):
+                    msgbox_text = self.handle_math(msgbox_text)
+
+                # Handle AHK newline escape
+                msgbox_text = str(msgbox_text)
+                msgbox_text = msgbox_text.replace("`n", "\n")
+
+                # Display the message
+                try:
+                    options_int = int(msgbox_options) if msgbox_options else 0
+                except (ValueError, TypeError):
+                    options_int = 0
+                # Low 4 bits are the button type: 4 = Yes/No (also 36 = Yes/No + question icon)
+                if (options_int & 0xF) == 4:
+                    self.builtin_variables["msgbox_result"] = messagebox.askyesno(msgbox_title, msgbox_text)
+                else:
+                    messagebox.showerror(msgbox_title, msgbox_text)
+
+            # IfMsgBox, Yes / IfMsgBox, No
+            if processed_line.startswith("ifmsgbox"):
+                arguments = [p.strip() for p in current_line.split(",")]
+                expected_button = arguments[1].strip().lower() if len(arguments) > 1 else ""
+                msgbox_result = self.builtin_variables.get("msgbox_result", False)
+                # messagebox.askyesno returns True for Yes, False for No
+                if isinstance(msgbox_result, bool):
+                    actual_button = "yes" if msgbox_result else "no"
+                else:
+                    actual_button = str(msgbox_result).lower()
+                result = (actual_button == expected_button)
+                skip_until = self.cmd_if(line, result, _script)
+                continue
+            if processed_line.startswith("pixelsearch"):
+                self.cmd_pixelsearch(current_line)
+            if processed_line.startswith("pixelgetcolor"):
+                self._cmd_pixelgetcolor(current_line)
+            if processed_line.startswith("send"):
+                self._cmd_send(current_line)
+            if processed_line.startswith("click"):
+                self._cmd_click(current_line)
+            if processed_line.startswith("sleep"):
+                self._cmd_sleep(current_line)
+            if processed_line.startswith("mousemove"):
+                self._cmd_mousemove(current_line)
+            if processed_line.startswith("mousegetpos"):
+                error = self._cmd_mousegetpos(current_line)
                 if error != 0:
                     messagebox.showerror(f"Error at line {line + 1}", f"Error at line {line + 1}\nError in MouseGetPos: {e}")
             # Hotkey, Hotkey, Label, Status
-            if processed_line2.startswith("hotkey"):
-                self.cmd_hotkey(processed_line)
+            if processed_line.startswith("hotkey"):
+                self.cmd_hotkey(current_line)
             # IniRead, OutputVar, Filename, Section, Key, Default=ERROR
             # IniWrite, Value, Filename, Section, Key
-            if processed_line2.startswith("ini"):
-                self.cmd_ini(processed_line)
+            if processed_line.startswith("ini"):
+                self.cmd_ini(current_line, next_line)
             # GuiControl, Subcommand, Control, Value
-            if processed_line2.startswith("guicontrol"):
-                self.cmd_guicontrol(processed_line)
+            if processed_line.startswith("guicontrol"):
+                self.cmd_guicontrol(current_line)
             # WinActivate, Window
-            if processed_line2.startswith("winactivate"):
-                self.cmd_winactivate(processed_line)
+            if processed_line.startswith("winactivate"):
+                self.cmd_winactivate(current_line)
             # WinGetPos, OutX, OutY, OutWidth, OutHeight [, WinTitle]
-            if processed_line2.startswith("wingetpos"):
-                self.cmd_wingetpos(processed_line)
+            if processed_line.startswith("wingetpos"):
+                self.cmd_wingetpos(current_line)
             # Gui, Action
-            if processed_line2.startswith("gui") and not processed_line2.startswith("guicontrol"):
-                self.cmd_gui(processed_line)
+            if processed_line.startswith("gui") and not processed_line.startswith("guicontrol"):
+                self.cmd_gui(current_line)
             # SetKeyDelay, Delay
-            if processed_line2.startswith("setkeydelay"):
-                parts = [x.strip() for x in processed_line.split(",")]
+            if processed_line.startswith("setkeydelay"):
+                parts = [x.strip() for x in current_line.split(",")]
                 self.key_delay = int(parts[1])
             # Reload
-            if processed_line2.startswith("reload"):
-                args = [sys.executable, f'"{sys.argv[0]}"'] + sys.argv[1:]
+            if processed_line.startswith("reload"):
+                # os.execv does not use a shell, so do not wrap the script path in quotes.
+                # Extra quotes become part of the filename and fail on macOS/Linux.
+                args = [sys.executable] + list(sys.argv)
                 os.execv(sys.executable, args)
             # ExitApp
-            if processed_line2.startswith("exitapp"):
+            if processed_line.startswith("exitapp"):
                 self.destroy()
     def _cmd_directives(self, line):
         processed_line = line.replace("#", "")
@@ -1525,6 +1702,39 @@ class Playback(tk.Tk):
         #MaxThreadsPerHotkey
         if processed_line.startswith("MaxThreadsPerHotkey"):
             self.max_hotkey_threads = int(processed_line.replace("MaxThreadsPerHotkey", ""))
+    def parse_gui_placement(self, placement, allow_register_gui_placement=False):
+        """Defaults match cmd_gui so omitted x/y/w/h/v/g behave exactly like the
+        inline parser in the October 10 beta (Labels etc. keep their size)."""
+        try:
+            x = 0
+            y = 0
+            w = 100
+            h = 28 if sys.platform == "darwin" else 24
+            v = ""
+            g = ""
+            saw_v = False
+            for item in placement:
+                if not isinstance(item, str) or not item:
+                    continue
+                if item.startswith("x"):
+                    x = int(item[1:])
+                elif item.startswith("y"):
+                    y = int(item[1:])
+                elif item.startswith("w"):
+                    w = int(item[1:])
+                elif item.startswith("h"):
+                    h = int(item[1:])
+                elif item.startswith("v"):
+                    v = str(item[1:])
+                    saw_v = True
+                elif item.startswith("g"):
+                    g = str(item[1:])
+            if allow_register_gui_placement and saw_v and v:
+                # Store the original token list so Show can tell which sizes were explicit
+                self.gui_placements[v] = " ".join(item for item in placement if item)
+            return x, y, w, h, v, g, 0
+        except Exception as e:
+            return 0, 0, 0, 0, 0, 0, e
     def cmd_gui(self, line):
         # Define defaults
         arguments = [p.strip() for p in line.split(",")]
@@ -1589,20 +1799,11 @@ class Playback(tk.Tk):
         # Gui, Add
         if arguments[1] == "Add":
             placement = arguments[3].split(" ")
-            for item in range(len(placement)):
-                for item in placement:
-                    if item.startswith("x"):
-                        x = int(item[1:])
-                    elif item.startswith("y"):
-                        y = int(item[1:])
-                    elif item.startswith("w"):
-                        w = int(item[1:])
-                    elif item.startswith("h"):
-                        h = int(item[1:])
-                    elif item.startswith("v"):
-                        v = str(item[1:])
-                    elif item.startswith("g"):
-                        g = str(item[1:])
+            x, y, w, h, v, g, error = self.parse_gui_placement(placement, True)
+            if error != 0:
+                messagebox.showerror("Error", f"Error when placing {arguments[2]}: {error}")
+            if v:
+                self.gui_objects[v] = arguments[2]
             # Gui, Add, Tab2
             if arguments[2] == "Tab2":
                 if w > self.gui_expansion_width:
@@ -1628,7 +1829,12 @@ class Playback(tk.Tk):
             # Gui, Add, Text
             if arguments[2] == "Text":
                 label = tk.Label(self.current_tab2, text=arguments[4], fg=self.color, bg=self.gui_color, font=("Segoe UI", self.font_size, font_style))
-                label.place(x=(x - current_offset_x), y=(y - current_offset_y))
+                place_x = x - current_offset_x
+                place_y = y - current_offset_y
+                label.place(x=place_x, y=place_y)
+                if v and v != 0:
+                    self.gui_controls[v] = label
+                    self.gui_place_info[v] = {"x": place_x, "y": place_y}
             # Gui, Add, Edit
             if arguments[2] == "Edit":
                 entry_var = tk.StringVar(value="")
@@ -1636,8 +1842,12 @@ class Playback(tk.Tk):
                 entry = tk.Entry(self.current_tab2, bg="white", fg="black", textvariable=entry_var,
                                  insertbackground="black", disabledbackground="white", 
                                  disabledforeground="black", highlightbackground=self.gui_color)
-                entry.place(x=(x - current_offset_x), y=(y - current_offset_y - 5), width=w, height=h)
+                place_x = x - current_offset_x
+                place_y = y - current_offset_y - 5
+                entry.place(x=place_x, y=place_y, width=w, height=h)
                 self.gui_controls[v] = entry
+                if v:
+                    self.gui_place_info[v] = {"x": place_x, "y": place_y, "width": w, "height": h}
             # Gui, Add, GroupBox
             if arguments[2] == "GroupBox":
                 if w > self.gui_expansion_width:
@@ -1645,8 +1855,12 @@ class Playback(tk.Tk):
                 if h > self.gui_expansion_height:
                     self.gui_expansion_height = y + h + 11
                 group = tk.LabelFrame(self.current_tab2, text=arguments[4], borderwidth=3, bg=self.gui_color, fg=self.color, font=("Segoe UI", self.font_size, font_style))
-                group.place(x=(x - current_offset_x), y=(y - current_offset_y), width=w, height=h)
+                place_x = x - current_offset_x
+                place_y = y - current_offset_y
+                group.place(x=place_x, y=place_y, width=w, height=h)
                 self.gui_controls[v] = group
+                if v:
+                    self.gui_place_info[v] = {"x": place_x, "y": place_y, "width": w, "height": h}
             # Gui, Add, Checkbox
             if arguments[2] == "Checkbox":
                 try:
@@ -1655,8 +1869,12 @@ class Playback(tk.Tk):
                     self.gui_variables["0"] = tk.StringVar(value=0)
                 checkbox = ttk.Checkbutton(self.current_tab2, text=arguments[4], variable=self.gui_variables[v], onvalue="1", offvalue="0",
                                            command=lambda label=g: self.cmd_gosub(f"GoSub, {label}") if label else None, style="Dark.TCheckbutton")
-                checkbox.place(x=(x - current_offset_x), y=(y - current_offset_y))
+                place_x = x - current_offset_x
+                place_y = y - current_offset_y
+                checkbox.place(x=place_x, y=place_y)
                 self.gui_controls[v] = checkbox
+                if v:
+                    self.gui_place_info[v] = {"x": place_x, "y": place_y}
             # Gui, Add, Button
             if arguments[2] == "Button":
                 button = tk.Button(
@@ -1664,7 +1882,12 @@ class Playback(tk.Tk):
                     text=arguments[4],
                     command=lambda label=g: self.cmd_gosub(f"GoSub, {label}") if label else None
                 )
-                button.place(x=(x - current_offset_x), y=(y - current_offset_y), width=w, height=h)
+                place_x = x - current_offset_x
+                place_y = y - current_offset_y
+                button.place(x=place_x, y=place_y, width=w, height=h)
+                if v and v != 0:
+                    self.gui_controls[v] = button
+                    self.gui_place_info[v] = {"x": place_x, "y": place_y, "width": w, "height": h}
             # Gui, Add, DropDownList
             if arguments[2] == "DropDownList":
                 values2 = self.handle_variable(arguments[4])
@@ -1678,9 +1901,12 @@ class Playback(tk.Tk):
                     values=values,
                     textvariable=combo_var
                 )
-                combobox.place(x=(x - current_offset_x), y=(y - current_offset_y), width=w) # Do not use height
+                place_x = x - current_offset_x
+                place_y = y - current_offset_y
+                combobox.place(x=place_x, y=place_y, width=w) # Do not use height
                 self.gui_controls[v] = combobox
                 if v:
+                    self.gui_place_info[v] = {"x": place_x, "y": place_y, "width": w}
                     self.gui_variables[v] = combo_var
                     self.local_variables[v] = combo_var.get()
                 if g:
@@ -1749,7 +1975,8 @@ class Playback(tk.Tk):
                 try:
                     data[key] = var.get()
                 except Exception as e:
-                    print(f"Skipping {key}: {e}")
+                    # print(f"Skipping {key}: {e}")
+                    pass
         # Save editor script directly into config
         if hasattr(self, "editor_textbox"):
             data["ahk_script"] = self.editor_textbox.get("1.0", "end").strip()
@@ -1784,6 +2011,7 @@ class Playback(tk.Tk):
             return len(str(string))
 
         def InStr(haystack, needle, case_sensitive=False, starting_pos=1, occurrence=1):
+            starting_pos = int(starting_pos)
             haystack = str(haystack)
             needle = str(needle)
             if not case_sensitive:
@@ -2474,6 +2702,23 @@ class Playback(tk.Tk):
 
         return re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", repl, raw)
 
+    def handle_string_variables(self, value):
+        """Expand percent variables and known bare variables within a string."""
+        raw = "" if value is None else str(value)
+        if "A_TickCount" in raw:
+            self.builtin_variables["A_TickCount"] = int(time.perf_counter() * 1000)
+
+        pattern = r"%([A-Za-z_][A-Za-z0-9_]*)%|\b([A-Za-z_][A-Za-z0-9_]*)\b"
+
+        def replace(match):
+            name = match.group(1) or match.group(2)
+            found = self._lookup_variable(name, None)
+            if found is None:
+                return match.group(0)
+            return str(found)
+        
+        return re.sub(pattern, replace, raw)
+
     def _eval_math(self, value):
         """
         Evaluate a more complex math expression.
@@ -2506,6 +2751,29 @@ class Playback(tk.Tk):
 
         except Exception:
             return value
+
+    def _has_unquoted_math_operator(self, expr):
+        """True if expr contains an unquoted + - * or / (AHK expression math)."""
+        s = "" if expr is None else str(expr)
+        in_quote = None
+        i = 0
+        while i < len(s):
+            ch = s[i]
+            if in_quote:
+                if ch == in_quote:
+                    in_quote = None
+                elif ch == "`" and i + 1 < len(s):
+                    i += 1  # skip AHK escape
+                i += 1
+                continue
+            if ch in "\"'":
+                in_quote = ch
+                i += 1
+                continue
+            if ch in "+-*/":
+                return True
+            i += 1
+        return False
 
     def handle_math(self, value):
         raw = "" if value is None else str(value).strip()
@@ -2785,13 +3053,14 @@ class Playback(tk.Tk):
 
         raise UnicodeError(f"Unable to read {filename}")
 
-    def cmd_ini(self, action):
-        parts = [x.strip() for x in action.split(",")]
+    def cmd_ini(self, current_line, next_line):
+        parts = [x.strip() for x in current_line.split(",")]
         command = parts[0].lower()
+        next_line_processed = next_line.replace(" ", "")
         # IniRead, OutputVar, Filename, Section, Key, Default=ERROR
         if command == "iniread":
             if len(parts) < 5:
-                raise SyntaxError(f"{action}, IniRead requires OutputVar, Filename, Section, Key")
+                raise SyntaxError(f"{current_line}, IniRead requires OutputVar, Filename, Section, Key")
 
             output_var, filename, section, key = parts[1:5]
             default = parts[5] if len(parts) > 5 else "ERROR"
@@ -2824,13 +3093,31 @@ class Playback(tk.Tk):
                 filename = filename.replace("\\", "/")
             # Start With The Default; Only Overwrite If The Key Is Actually Found
             value = default
-            if os.path.exists(filename):
-                try:
-                    lines = self.read_ini(filename)
-                except Exception:
-                    lines = []
+            # Load Settings (Use Cache)
+            if filename != self.cached_file:
+                # Flush any pending write for the previous file
+                if self.save_cache and self.cached_file:
+                    try:
+                        with open(self.cached_file, "w", encoding="utf-16") as f:
+                            f.writelines(self.save_cache)
+                    except Exception as e:
+                        print(f"Failed to flush INI cache for '{self.cached_file}': {e}")
+                    self.save_cache = []
+                self.load_cache = {}  # Clear cache if file changes
+            self.cached_file = filename
+            if filename in self.load_cache:
+                print(f"[Load] Cache hit: {filename}")
+                lines = self.load_cache[filename]
             else:
-                lines = []
+                print(f"[Load] Cache miss: {filename}")
+                if os.path.exists(filename):
+                    try:
+                        lines = self.read_ini(filename)
+                    except Exception:
+                        lines = []
+                else:
+                    lines = []
+                self.load_cache[filename] = lines
             current_section = None
             for line in lines:
                 stripped = line.strip()
@@ -2855,7 +3142,7 @@ class Playback(tk.Tk):
             if len(parts) < 5:
                 raise SyntaxError(
 
-                    f"{action}: IniWrite requires Value, Filename, Section, Key"
+                    f"{current_line}: IniWrite requires Value, Filename, Section, Key"
                 )
             value, filename, section, key = parts[1:5]
             # Resolve %Var% References
@@ -2876,13 +3163,29 @@ class Playback(tk.Tk):
             # Fix macOS paths
             if sys.platform != "win32":
                 filename = filename.replace("\\", "/")
-            if os.path.exists(filename):
-                try:
-                    lines = self.read_ini(filename)
-                except Exception:
-                    lines = []
+            # Load Settings (Use Cache)
+            if filename != self.cached_file:
+                # Flush any pending write for the previous file
+                if self.save_cache and self.cached_file:
+                    try:
+                        with open(self.cached_file, "w", encoding="utf-16") as f:
+                            f.writelines(self.save_cache)
+                    except Exception as e:
+                        print(f"Failed to flush INI cache for '{self.cached_file}': {e}")
+                    self.save_cache = []
+                self.load_cache = {}  # Clear cache if file changes
+            self.cached_file = filename
+            if filename in self.load_cache:
+                lines = self.load_cache[filename]
             else:
-                lines = []
+                if os.path.exists(filename):
+                    try:
+                        lines = self.read_ini(filename)
+                    except Exception:
+                        lines = []
+                else:
+                    lines = []
+                self.load_cache[filename] = lines
             found_section = False
             written = False
             output = []
@@ -2917,15 +3220,26 @@ class Playback(tk.Tk):
             # Section exists but key does not
             elif not written:
                 output.append(f"{key}={value}\n")
-            try:
-                with open(filename, "w", encoding="utf-16") as f:
-                    f.writelines(output)
-            except Exception as e:
-                print(f"Failed to write INI file '{filename}': {e}")
+            # Update in-memory cache so later commands see the change immediately
+            self.load_cache[filename] = output
+
+            # Defer disk write if the next command is also IniWrite (batch consecutive writes)
+            next_cmd = (next_line_processed or "").lower()
+            if next_cmd.startswith("iniwrite"):
+                print(f"[Save] Cache update: {filename}")
+                self.save_cache = output
+            else:
+                print(f"[Save] Cache reset: {filename}")
+                try:
+                    with open(filename, "w", encoding="utf-16") as f:
+                        f.writelines(output)
+                except Exception as e:
+                    print(f"Failed to write INI file '{filename}': {e}")
+                self.save_cache = []
             return
 
-    def cmd_guicontrol(self, action):
-        parts = [x.strip() for x in action.split(",", 3)]
+    def cmd_guicontrol(self, current_line):
+        parts = [x.strip() for x in current_line.split(",", 3)]
         # GuiControl, Subcommand, Control, Value
         while len(parts) < 4:
             parts.append("")
@@ -2947,24 +3261,33 @@ class Playback(tk.Tk):
                 widget.invoke() if bool(value) != bool(widget.instate(["selected"])) else None
             elif getattr(widget, "_is_gui_image", False):
                 pass
-
             elif isinstance(widget, tk.Label):
-                pass
-
+                widget.config(text=value)
             elif isinstance(widget, tk.Button):
-                pass
+                widget.config(text=value)
 
         elif subcommand == "enable":
-            pass
+            widget.configure(state="normal")
 
         elif subcommand == "disable":
-            pass
+            widget.configure(state="disabled")
 
         elif subcommand == "hide":
-            pass
+            widget.place_forget()
 
         elif subcommand == "show":
-            pass
+            if control not in self.gui_place_info or widget is None:
+                return
+            info = self.gui_place_info[control]
+            place_kwargs = {
+                "x": info["x"],
+                "y": info["y"],
+            }
+            if "width" in info and info["width"] is not None:
+                place_kwargs["width"] = info["width"]
+            if "height" in info and info["height"] is not None:
+                place_kwargs["height"] = info["height"]
+            widget.place(**place_kwargs)
 
     def refresh_windows(self):
         """
@@ -3473,14 +3796,14 @@ class Playback(tk.Tk):
                     main_parts.append(token)
                 i = j
         if not main_parts:
-            return self._canonical_hotkey(modifiers)
+            return self.find_hotkey_combo(modifiers)
 
         main = "".join(main_parts)
-        return self._canonical_hotkey(modifiers, main)
+        return self.find_hotkey_combo(modifiers, main)
 
     _MODIFIER_KEYS = {"CTRL", "ALT", "SHIFT", "LWIN", "RWIN"}
     _MODIFIER_ORDER = ("CTRL", "ALT", "SHIFT", "LWIN", "RWIN")
-    def _canonical_hotkey(self, modifiers, main=""):
+    def find_hotkey_combo(self, modifiers, main=""):
         """Build a stable CTRL+ALT+SHIFT+LWIN+KEY string for lookup."""
         present = {str(m).upper() for m in modifiers if m}
         # Treat either Windows/Command key as the same modifier for matching.
@@ -3560,11 +3883,14 @@ class Playback(tk.Tk):
             self._active_hotkey_modifiers.add(normalized)
             return
 
-        combo = self._canonical_hotkey(
+        combo = self.find_hotkey_combo(
             self._active_hotkey_modifiers,
             normalized
         )
-        target = self.hotkeys.get(combo)
+        try:
+            target = self.hotkeys[combo]
+        except KeyError:
+            return
         if target is None:
             return
 
@@ -3762,21 +4088,61 @@ class Playback(tk.Tk):
     def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
         """
         Send a keyboard event.
-        delay: Delay between send and release
+        delay2: Delay between press and release, in milliseconds (AHK SetKeyDelay style).
+                Converted to seconds for the sleep calls.
         click_type:
             0 = click (press + release)   [default]
             1 = hold (press only)
             2 = release (release only)
         """
         key = str(key2)
-        backend = backend2.lower()
+        backend = str(backend2).lower()
         try:
-            delay = abs(float(delay2))
-        except:
+            delay = abs(float(delay2)) / 1000.0
+        except (ValueError, TypeError):
             delay = 0.1
-        if backend == "Input":
+
+        # Mouse buttons requested via Send (AHK {LButton}/{RButton}/{MButton})
+        mouse_buttons = {
+            "lbutton": "left",
+            "rbutton": "right",
+            "mbutton": "middle",
+        }
+        key_lower = key.lower()
+        if key_lower in mouse_buttons:
+            button = mouse_buttons[key_lower]
+            if click_type == 1:
+                action = "down"
+            elif click_type == 2:
+                action = "up"
+            else:
+                action = "click"
+            # Pass original backend so _click_at receives the same value used by Click.
+            self._click_at(None, None, backend2, button=button, action=action)
+            return
+
+        # Known multi-character special key names (case-insensitive).
+        # Plain multi-character strings that do not match these (e.g. "10", "abc")
+        # are sent as individual character keystrokes, matching AHK Send behavior.
+        special_names = {
+            "lbutton", "rbutton", "mbutton",
+            "enter", "return", "tab", "space", "esc", "escape", "backspace", "delete",
+            "up", "down", "left", "right", "shift", "ctrl", "control", "alt",
+            "pause", "capslock", "pageup", "pgup", "pagedown", "pgdn", "end", "home",
+            "insert", "win", "lwin", "rwin", "apps", "numlock", "scrolllock",
+            "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+            "f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23", "f24",
+        }
+
+        # Sequence of plain characters (not a named special key)
+        if (click_type == 0 and len(key) > 1 and key.lower() not in special_names):
+            for char in key:
+                self._send_key(char, backend2, delay2, click_type)
+            return
+
+        if backend == "input":
             send_key(key, delay=delay, click_type=click_type)
-        elif backend == "Event":
+        elif backend == "event":
             # Convert Special Key Names
             special_keys = {
                 "enter": Key.enter,
@@ -3792,19 +4158,20 @@ class Playback(tk.Tk):
                 "left": Key.left,
                 "right": Key.right,
             }
-            key = special_keys.get(key.lower(), key)
+            key_obj = special_keys.get(key.lower(), key)
             try:
                 if click_type == 0:
-                    keyboard_controller.press(key)
+                    keyboard_controller.press(key_obj)
                     time.sleep(delay)
-                    keyboard_controller.release(key)
+                    keyboard_controller.release(key_obj)
                 elif click_type == 1:
-                    keyboard_controller.press(key)
+                    keyboard_controller.press(key_obj)
                 elif click_type == 2:
-                    keyboard_controller.release(key)
+                    keyboard_controller.release(key_obj)
             except Exception as e:
-                print("Error sending keys:", e)
-        elif backend == "Play":
+                full_error = traceback.format_exc()
+                print(full_error)
+        elif backend == "play":
             try:
                 if click_type == 0:
                     pyautogui.keyDown(key)
@@ -3815,7 +4182,8 @@ class Playback(tk.Tk):
                 elif click_type == 2:
                     pyautogui.keyUp(key)
             except Exception as e:
-                print("Error sending keys with PyAutoGUI:", e)
+                full_error = traceback.format_exc()
+                print(full_error)
     def _click_at(self, x, y, backend, button="left", action="click", click_count=1):
         # Convert Coordinates If Needed (Retina Scaling)
         if x is not None and y is not None:
@@ -3824,7 +4192,8 @@ class Playback(tk.Tk):
                 x = int(x / scale)
                 y = int(y / scale)
         # Resolve Backend-Specific Button Names.
-        if backend == "Input":
+        backend = str(backend).lower() if backend else ""
+        if backend == "input":
             # Separate Branches For Windows And macOS/Linux Mouse Events.
             if sys.platform == "win32":
                 if x is not None and y is not None:
@@ -3864,7 +4233,7 @@ class Playback(tk.Tk):
                         _mouse_event(button=button, press=False)
                         if i < click_count - 1:
                             time.sleep(0.03)
-        elif backend == "Event":
+        elif backend == "event":
             if x is not None and y is not None:
                 mouse_controller.position = (x, y)
             button_map = {
@@ -3885,7 +4254,7 @@ class Playback(tk.Tk):
                     mouse_controller.click(mouse_button)
                     if i < click_count - 1:
                         time.sleep(0.03)
-        elif backend == "Play":
+        elif backend == "play":
             if x is not None and y is not None:
                 pyautogui.moveTo(x, y)
             if action == "down":
@@ -3952,8 +4321,10 @@ class Playback(tk.Tk):
                 else:
                     keys = inner
             self._send_key(keys, backend, self.key_delay, click_type)
-        except Exception:
-            pass
+        except Exception as e:
+            error = traceback.format_exc()
+            print(error)
+            return
 
         return
 
@@ -4032,13 +4403,20 @@ class Playback(tk.Tk):
                 action=click_action
             )
         except Exception as e:
-            return e
+            error = traceback.format_exc()
+            print(error)
+            return
 
     def _cmd_sleep(self, action):
-        _, value = action.split(",", 1)
-        value = self.handle_variable(value)
-        ms = float(value.strip())   # float() accepts "400.0" and "400"
-        time.sleep((ms / 1000))
+        try:
+            _, value = action.split(",", 1)
+            value = self.handle_variable(value)
+            ms = float(value.strip())   # float() accepts "400.0" and "400"
+            time.sleep((ms / 1000))
+        except Exception as e:
+            error = traceback.format_exc()
+            print(error)
+            return
     def _cmd_mousemove(self, action):
         _, args = action.split(",", 1)
         x, y = [int(v.strip()) for v in args.split(",")]

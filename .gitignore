@@ -1,11 +1,5 @@
-Solar Fishing Lite.ahk
-recording.ahk
-Redliner.ahk
-fisch.ahk
-gag 2.ahk
-gag.ahk
-GlobalSettings.ini
-icon 2.png
-SolarFishingV5.py
-DeepFish ALPHA v1.0.ahk
-Bloom.ahk
+configs/
+*.ini
+*.ahk
+*.txt
+*.DS_Store

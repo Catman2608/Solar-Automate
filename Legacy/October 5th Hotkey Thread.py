@@ -3405,15 +3405,15 @@ class Playback(tk.Tk):
                     main_parts.append(token)
                 i = j
         if not main_parts:
-            return self._canonical_hotkey(modifiers)
+            return self.find_hotkey_combo(modifiers)
 
         main = "".join(main_parts)
-        return self._canonical_hotkey(modifiers, main)
+        return self.find_hotkey_combo(modifiers, main)
 
     _MODIFIER_KEYS = {"CTRL", "ALT", "SHIFT", "LWIN", "RWIN"}
     _MODIFIER_ORDER = ("CTRL", "ALT", "SHIFT", "LWIN", "RWIN")
 
-    def _canonical_hotkey(self, modifiers, main=""):
+    def find_hotkey_combo(self, modifiers, main=""):
         """Build a stable CTRL+ALT+SHIFT+LWIN+KEY string for lookup."""
         present = {str(m).upper() for m in modifiers if m}
         # Treat either Windows/Command key as the same modifier for matching.
@@ -3495,7 +3495,7 @@ class Playback(tk.Tk):
             self._active_hotkey_modifiers.add(normalized)
             return
 
-        combo = self._canonical_hotkey(
+        combo = self.find_hotkey_combo(
             self._active_hotkey_modifiers,
             normalized
         )
