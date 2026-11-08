@@ -4,6 +4,8 @@ This project is licensed under the GNU GPL v3.
 
 You are free to study, modify, and redistribute this software. If you distribute a project containing code from this repository, the resulting project must also be released under the GPL v3, with its source code made available.
 
+AutoHotkey is a trademark of its respective owners. This project is not affiliated with or endorsed by the AutoHotkey Foundation.
+
 # Solar Automate V3
 
 Pre-built versions are available for supported platforms on the official releases page:
@@ -17,7 +19,6 @@ If a pre-built version is not available for your system, follow the source insta
 ## 📋 Overview
 
 This guide walks through setting up Python and all required modules for running the project. The application uses GUI automation, OCR, screen capture, and cross-platform OS features.
-If the ZIP file is flagged as a virus and doesn't let you download, download only the SolarAutomateV3.py, the icon.ico and the icon.icns file.
 
 ---
 
@@ -61,44 +62,21 @@ Expected output: `Python 3.8+`
 Run this command in order to download the required libraries:
 
 ```bash
-pip install webview numpy mss pytesseract pynput requests opencv-python
+pip install numpy mss pynput
 ```
 If the command above fails, try using pip3 instead:
 ```bash
-pip3 install webview numpy mss pytesseract pynput requests opencv-python
+pip3 install numpy mss pynput
 ```
 
 ### Complete Package List Reference
 | Module | Command | Purpose |
 |--------|---------|---------|
-| `webview` | `pip install webview` | GUI window creation |
 | `numpy` | `pip install numpy` | Numerical operations, image arrays |
 | `mss` | `pip install mss` | Screenshot capture (multi-screen support) |
-| `pytesseract` | `pip install pytesseract` | OCR engine wrapper for Tesseract |
 | `pynput` | `pip install pynput` | Keyboard/mouse automation & listening |
-| `requests` | `pip install requests` | Discord API calls |
-| `opencv-python` or `opencv-python-headless` | `pip install opencv-python` | Image processing (cv2) |
 
 ---
-
-## 4️⃣ Install Tesseract (Recommended)
-Tesseract is not included with Python. Install it first:
-
-```bash
-# Option 1: Using Homebrew (macOS only)
-brew install tesseract
-
-# Option 2: Using MacPorts
-sudo port install tesseract
-
-# Verify installation location
-which tesseract
-```
-
-Then in your code, the path is already configured to:
-```python
-pytesseract.pytesseract.tesseract_cmd = "/opt/homebrew/bin/tesseract"
-```
 
 ## 5️⃣ Platform-Specific Setup
 
@@ -127,10 +105,8 @@ sudo apt install python3 python3-venv python3-tk tesseract-ocr
 Create a test script `test_imports.py`:
 
 ```python
-import webview, json, os, re, time, sys
+import json, os, re, time, sys
 from tkinter import messagebox
-import pytesseract
-print("Tesseract path:", pytesseract.pytesseract.tesseract_cmd)
 
 from pynput import keyboard, mouse
 from pynput.keyboard import Controller as KeyboardController
@@ -151,7 +127,7 @@ import requests, io
 print("✅ All modules imported successfully!")
 ```
 
-Run it with `python test_imports.py` — no errors means your setup is complete.
+Run it with `python test_imports.py` or `python3 test_imports.py` — no errors means your setup is complete.
 
 ---
 
@@ -160,6 +136,4 @@ Run it with `python test_imports.py` — no errors means your setup is complete.
 | Error | Solution |
 |-------|----------|
 | `_tkinter.TclError: No such file or directory` | Install tkinter: `pip install tkinter` (macOS) or reinstall Python with "Add to PATH" checked |
-| `ModuleNotFoundError: No module named 'tesseract'` | Install Tesseract OS package first, then `pip install pytesseract` |
-| `M1 Mac — OpenCV error about libGL` | Use `opencv-python-headless` instead of regular opencv |
 | Permission denied on screenshot/capture | Run the script as Administrator (Windows) or with elevated privileges (macOS) |

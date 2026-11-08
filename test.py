@@ -198,7 +198,7 @@ class MainGUI(tk.Tk):
 class Playback:
     def __init__(self):
         pass
-    def execute_script(self, start_line, end_line, _script=None, debug=False):
+    def execute_script(self, start_line, end_line, _script=None, debug=False, skip_functions=False):
         # Initialize Defaults
         if _script == None:
             _script = self.script
@@ -207,18 +207,22 @@ class Playback:
         # Convert start and end to integer
         start = int(start_line)
         end = int(end_line)
+        # Skip functions counter
+        if skip_functions == True:
+            skip_counter = 0
         # Start Macro
-        for line, current_line in enumerate(_script):
+        for line_count, current_line in enumerate(_script):
             if self.flow:
                 break
 
-            if line <= start or line <= skip_until:
+            if line_count <= start or line_count <= skip_until:
                 continue
 
-            if line >= end:
+            if line_count >= end:
                 break
 
-            processed_line = current_line.lower().replace("    ", "")
+            processed_line = current_line.lower().lstrip()
+            next_line = _script[line_count + 1] if line_count + 1 < len(_script) else ""
             if current_line.startswith(";") or current_line.strip() == "":
                 continue
 
@@ -227,8 +231,11 @@ class Playback:
                 self.flow = flow
                 break
 
+            if skip_functions == True:
+                self.skip_line_counts_start[skip_counter]
+                self.skip_line_counts_end[skip_counter]
             if debug == True:
-                print("Processing: ", _script[line])
+                print("Processing: ", _script[line_count])
             # Hashtag commands
             if processed_line.startswith("#"):
                 self._cmd_directives(current_line)
@@ -245,12 +252,12 @@ class Playback:
                 split = self._split_if_condition(condition)
                 if split is None:
                     # Bare variable / function / literal: AHK truthy check.
-                    value = self.handle_variable(condition, line)
+                    value = self.handle_variable(condition, line_count)
                     result = self._if_truthy(value)
                 else:
                     left, operator, right = split
-                    left = self._eval_if_operand(left, line)
-                    right = self._eval_if_operand(right, line)
+                    left = self._eval_if_operand(left, line_count)
+                    right = self._eval_if_operand(right, line_count)
                     try:
                         left = int(left)
                         right = int(right)
@@ -264,7 +271,7 @@ class Playback:
                         operator = "=="
                     processed_condition = f"{left!r} {operator} {right!r}"
                     result = eval(processed_condition)
-                skip_until = self.cmd_if(line, result, _script)
+                skip_until = self.cmd_if(line_count, result, _script)
                 continue
 
             # Loop, Files, Directory
@@ -273,7 +280,7 @@ class Playback:
             if is_loop_files:
                 file_pattern = is_loop_files.group(1).strip()
                 mode = is_loop_files.group(2)
-                skip_until = self.cmd_loop_files(line, file_pattern, mode, _script)
+                skip_until = self.cmd_loop_files(line_count, file_pattern, mode, _script)
                 continue
 
             # Loop, Amount
@@ -286,21 +293,21 @@ class Playback:
                 if raw_count is None or str(raw_count).strip() == "":
                     loop_count = None
                 else:
-                    resolved = self.handle_variable(str(raw_count).strip(), line)
+                    resolved = self.handle_variable(str(raw_count).strip(), line_count)
                     try:
                         loop_count = int(float(str(resolved).strip() or 0))
                     except (TypeError, ValueError):
                         loop_count = 0
                 # cmd_loop already runs the body loop_count times (or until Break).
                 # Jump past the matching } so the body is not run an extra time.
-                skip_until = self.cmd_loop(line, loop_count, _script)
+                skip_until = self.cmd_loop(line_count, loop_count, _script)
                 continue
 
             # GoSub, LabelName
             if processed_line.startswith("gosub"):
                 gosub = self.cmd_gosub(current_line)
                 if gosub != 0:
-                    messagebox.showerror(f"Error at line {line + 1}", f"Error at line {line + 1}\nMissing Label: {gosub}")
+                    messagebox.showerror(f"Error at line_count {line_count + 1}", f"Error at line_count {line_count + 1}\nMissing Label: {gosub}")
             # FunctionName(Parameters)
             function_pattern = r'(?mi)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\)\s*'
             is_function_call = re.match(function_pattern, current_line)
@@ -321,23 +328,73 @@ class Playback:
                         result = self.builtin_functions[function_name](*args)
                     else:
                         print(traceback.format_exc())
-                        messagebox.showerror(f"Error at line {line + 1}", f"Error at line {line + 1}\nMissing Function: {e}")
+                        messagebox.showerror(f"Error at line_count {line_count + 1}", f"Error at line_count {line_count + 1}\nMissing Function: {e}")
             # VariableName := Value
-            variable_assignment_pattern = r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*(.*?)\s*$'
+            # VariableName += Value
+            # VariableName -= Value
+            # VariableName *= Value
+            # VariableName /= Value
+            variable_assignment_pattern = (
+                r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*'
+                r'(:=|\+=|-=|\*=|/=)\s*(.*?)\s*$'
+            )
             match = re.match(variable_assignment_pattern, current_line)
             if match:
                 variable_name = match.group(1)
-                # Resolve functions / %Var% / bare identifiers.
-                variable_value = self.handle_variable(match.group(2))
-                # Keep an empty string as an empty string.
-                # Do not pass it through the math handler.
-                if variable_value != "":
+                operator = match.group(2)
+                raw_value = match.group(3)
+                # Resolve functions, %Var%, and bare identifiers.
+                variable_value = self.handle_variable(raw_value)
+                if operator == ':=':
+                    # Preserve empty strings for normal assignment.
+                    if variable_value != "":
+                        try:
+                            int(variable_value)
+                        except (TypeError, ValueError):
+                            variable_value = self.handle_math(variable_value)
+                    self.local_variables[variable_name] = variable_value
+                else:
+                    # Compound assignments require an existing variable.
+                    if variable_name not in self.local_variables:
+                        raise NameError(
+
+                            f"Variable '{variable_name}' is not defined"
+                        )
+                    current_value = self.local_variables[variable_name]
+                    # Convert both operands to numbers.
                     try:
-                        int(variable_value)
+                        left = float(current_value)
+                        right = float(variable_value)
                     except (TypeError, ValueError):
-                        variable_value = self.handle_math(variable_value)
-                self.local_variables[variable_name] = variable_value
-                # print(f"Variable Subsitution: {variable_name} := {variable_value} ({match.group(2)})")
+                        raise TypeError(
+
+                            f"Cannot apply {operator} to "
+                            f"'{current_value}' and '{variable_value}'"
+                        )
+                    if operator == '+=':
+                        result = left + right
+                    elif operator == '-=':
+                        result = left - right
+                    elif operator == '*=':
+                        result = left * right
+                    elif operator == '/=':
+                        if right == 0:
+                            raise ZeroDivisionError("Division by zero")
+
+                        result = left / right
+                    else:
+                        raise RuntimeError(
+
+                            f"Unsupported assignment operator: {operator}"
+                        )
+                    # Preserve integer results when both operands are integers.
+                    if (
+                        isinstance(current_value, int)
+                        or str(current_value).lstrip('-').isdigit()
+                    ) and str(variable_value).lstrip('-').isdigit():
+                        if result.is_integer():
+                            result = int(result)
+                    self.local_variables[variable_name] = result
             # VariableName .= Value
             # AHK v1: same as Var := Var . Value (expression).
             # FileName "|"  ->  FileName . "|"
@@ -353,38 +410,29 @@ class Playback:
             # SplitPath, InputVar, OutFileName, OutDir, OutExtension, OutNameNoExt, OutDrive
             if processed_line.startswith("splitpath"):
                 self.cmd_splitpath(current_line)
-
             # MsgBox, Options, Title, Text
             if processed_line.startswith("msgbox"):
                 arguments = [p.strip() for p in current_line.split(",", 3)]
-
                 # Default values
                 msgbox_options = ""
                 msgbox_title = "MsgBox"
                 msgbox_text = ""
-
                 if len(arguments) > 1:
                     msgbox_options = arguments[1]
-
                 if len(arguments) > 2:
                     msgbox_title = arguments[2]
-
                 if len(arguments) > 3:
                     msgbox_text = arguments[3]
-
                 # Handle Variable
                 msgbox_text = self.handle_string_variables(msgbox_text)
-
                 # Handle Math
                 try:
                     int(float(msgbox_text))
                 except (ValueError, TypeError):
                     msgbox_text = self.handle_math(msgbox_text)
-
-                # Handle AHK newline escape
+                # Handle AHK newline_count escape
                 msgbox_text = str(msgbox_text)
                 msgbox_text = msgbox_text.replace("`n", "\n")
-
                 # Display the message
                 try:
                     options_int = int(msgbox_options) if msgbox_options else 0
@@ -395,7 +443,6 @@ class Playback:
                     self.builtin_variables["msgbox_result"] = messagebox.askyesno(msgbox_title, msgbox_text)
                 else:
                     messagebox.showerror(msgbox_title, msgbox_text)
-
             # IfMsgBox, Yes / IfMsgBox, No
             if processed_line.startswith("ifmsgbox"):
                 arguments = [p.strip() for p in current_line.split(",")]
@@ -407,8 +454,9 @@ class Playback:
                 else:
                     actual_button = str(msgbox_result).lower()
                 result = (actual_button == expected_button)
-                skip_until = self.cmd_if(line, result, _script)
+                skip_until = self.cmd_if(line_count, result, _script)
                 continue
+
             if processed_line.startswith("pixelsearch"):
                 self.cmd_pixelsearch(current_line)
             if processed_line.startswith("pixelgetcolor"):
@@ -418,20 +466,22 @@ class Playback:
             if processed_line.startswith("click"):
                 self._cmd_click(current_line)
             if processed_line.startswith("sleep"):
-                self._cmd_sleep(current_line)
+                error = self._cmd_sleep(current_line)
+                if error != 0:
+                    messagebox.showerror(f"Error at line_count {line_count + 1}", f"Error at line_count {line_count + 1}\n{error}")
             if processed_line.startswith("mousemove"):
                 self._cmd_mousemove(current_line)
             if processed_line.startswith("mousegetpos"):
                 error = self._cmd_mousegetpos(current_line)
                 if error != 0:
-                    messagebox.showerror(f"Error at line {line + 1}", f"Error at line {line + 1}\nError in MouseGetPos: {e}")
+                    messagebox.showerror(f"Error at line_count {line_count + 1}", f"Error at line_count {line_count + 1}\nError in MouseGetPos: {e}")
             # Hotkey, Hotkey, Label, Status
             if processed_line.startswith("hotkey"):
                 self.cmd_hotkey(current_line)
             # IniRead, OutputVar, Filename, Section, Key, Default=ERROR
             # IniWrite, Value, Filename, Section, Key
             if processed_line.startswith("ini"):
-                self.cmd_ini(current_line)
+                self.cmd_ini(current_line, next_line)
             # GuiControl, Subcommand, Control, Value
             if processed_line.startswith("guicontrol"):
                 self.cmd_guicontrol(current_line)
@@ -450,7 +500,9 @@ class Playback:
                 self.key_delay = int(parts[1])
             # Reload
             if processed_line.startswith("reload"):
-                args = [sys.executable, f'"{sys.argv[0]}"'] + sys.argv[1:]
+                # os.execv does not use a shell, so do not wrap the script path in quotes.
+                # Extra quotes become part of the filename and fail on macOS/Linux.
+                args = [sys.executable] + list(sys.argv)
                 os.execv(sys.executable, args)
             # ExitApp
             if processed_line.startswith("exitapp"):
