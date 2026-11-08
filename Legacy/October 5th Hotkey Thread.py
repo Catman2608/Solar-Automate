@@ -1918,7 +1918,7 @@ class Playback(tk.Tk):
                     break
     def _unwrap_parens(self, value):
         """
-        Strip wrapping ( ... ) pairs that enclose the whole string.
+        Strip wrapping (...) pairs that enclose the whole string.
         Inner parentheses belonging to function calls are left alone.
         """
         s = "" if value is None else str(value).strip()

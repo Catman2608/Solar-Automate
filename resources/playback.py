@@ -1090,7 +1090,7 @@ class Playback(tk.Tk):
                 self.labels[name] = body_lines
                 # Skip the label body
                 self.current_line_count = end_index
-            # Hotkey Labels  (e.g. F1::  or  ^!s:: )
+            # Hotkey Labels  (e.g. F1::  or  ^!s::)
             else:
                 m = re.match(r"^([^\s:]+)::$", line)
                 if m:

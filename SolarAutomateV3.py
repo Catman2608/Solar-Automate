@@ -174,21 +174,9 @@ if sys.platform == "win32":
         extra = ctypes.c_ulong(0)
         def key_event(is_key_up):
             flags = KEYEVENTF_KEYUP if is_key_up else 0
-            inp = INPUT(
-                type=INPUT_KEYBOARD,
-                ki=KEYBDINPUT(
-                    wVk=vk,
-                    wScan=0,
-                    dwFlags=flags,
-                    time=0,
-                    dwExtraInfo=ctypes.pointer(extra),
-                ),
+            inp = INPUT(type=INPUT_KEYBOARD, ki=KEYBDINPUT(wVk=vk, wScan=0, dwFlags=flags, time=0, dwExtraInfo=ctypes.pointer(extra),),
             )
-            user32.SendInput(
-                1,
-                ctypes.byref(inp),
-                ctypes.sizeof(INPUT)
-            )
+            user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
         if click_type == 0:
             key_event(False)
             time.sleep(delay)
@@ -259,13 +247,9 @@ elif sys.platform == "darwin":
         # Private Source So Posted Keys Do Not Inherit Hardware Command/Fn/Globe State
         global _QUARTZ_KEY_SOURCE
         if _QUARTZ_KEY_SOURCE is None:
-            _QUARTZ_KEY_SOURCE = Quartz.CGEventSourceCreate(
-                Quartz.kCGEventSourceStatePrivate
-            )
+            _QUARTZ_KEY_SOURCE = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStatePrivate)
             try:
-                Quartz.CGEventSourceSetLocalEventsSuppressionInterval(
-                    _QUARTZ_KEY_SOURCE, 0.0
-                )
+                Quartz.CGEventSourceSetLocalEventsSuppressionInterval(_QUARTZ_KEY_SOURCE, 0.0)
             except Exception:
                 print(traceback.format_exc())
 
@@ -323,12 +307,7 @@ elif sys.platform == "darwin":
             key = "left"
         btn, down_evt, up_evt = button_map[key]
         event_type = down_evt if press else up_evt
-        event = Quartz.CGEventCreateMouseEvent(
-            None,
-            event_type,
-            Quartz.CGPointMake(float(x), float(y)),
-            btn
-        )
+        event = Quartz.CGEventCreateMouseEvent(None, event_type, Quartz.CGPointMake(float(x), float(y)), btn)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
     def send_key(key, delay=0.05, click_type=0, flags=0):
         """
@@ -421,11 +400,7 @@ elif sys.platform.startswith("linux"):
         }
         key = button.lower() if isinstance(button, str) else button
         btn = button_map.get(key, 1)
-        xtest.fake_input(
-            d,
-            X.ButtonPress if press else X.ButtonRelease,
-            btn
-        )
+        xtest.fake_input(d, X.ButtonPress if press else X.ButtonRelease, btn)
         d.sync()
     def send_key(key, delay=0.05, click_type=0):
         d = _get_xdisplay()
@@ -485,28 +460,13 @@ def cgimage_to_srgb_numpy(image):
         height = Quartz.CGImageGetHeight(image)
         bytes_per_row = width * 4
         # Create sRGB color space
-        color_space = Quartz.CGColorSpaceCreateWithName(
-            Quartz.kCGColorSpaceSRGB
-        )
+        color_space = Quartz.CGColorSpaceCreateWithName(Quartz.kCGColorSpaceSRGB)
         # Allocate buffer
         raw = np.empty((height, width, 4), dtype=np.uint8)
         # Create bitmap context targeting numpy buffer
-        context = Quartz.CGBitmapContextCreate(
-            raw,
-            width,
-            height,
-            8,
-            bytes_per_row,
-            color_space,
-            Quartz.kCGImageAlphaPremultipliedLast |
-            Quartz.kCGBitmapByteOrder32Big
-        )
+        context = Quartz.CGBitmapContextCreate(raw, width, height, 8, bytes_per_row, color_space, Quartz.kCGImageAlphaPremultipliedLast | Quartz.kCGBitmapByteOrder32Big)
         # Draw image into sRGB context
-        Quartz.CGContextDrawImage(
-            context,
-            Quartz.CGRectMake(0, 0, width, height),
-            image
-        )
+        Quartz.CGContextDrawImage(context, Quartz.CGRectMake(0, 0, width, height), image)
         # RGBA -> BGR
         bgr = raw[:, :, :3][:, :, ::-1]
         return bgr.copy()
@@ -529,6 +489,8 @@ class MainGUI(tk.Tk):
             style = ttk.Style()
             style.theme_use("clam")
             style.configure("TNotebook.Tab", padding=(0, 0, 0, 0))
+        self.gui_color = "white"
+        self.color = "black"
         # TTK Notebook/TabView
         notebook = ttk.Notebook(self)
         notebook.place(x=10, y=5, width=650, height=650)
@@ -536,135 +498,57 @@ class MainGUI(tk.Tk):
         notebook.add(self.overview_tab, text="Overview")
         # Build Tabs
         self.build_overview_tab()
+        self.update_style()
         self.mainloop()
+    # Update Style
+    def update_style(self):
+        style = ttk.Style()
+        style.configure("TNotebook", background=self.gui_color)
+        style.configure("TFrame", background=self.gui_color)
+        style.configure("TNotebook.Tab", background=self.gui_color, foreground=self.color)
+        style.map("TNotebook.Tab", background=[ ("selected", self.gui_color), ("active", self.gui_color) ], foreground=[ ("selected", self.color), ("active", self.color) ])
+        style.configure("TCheckbutton", background=self.gui_color, foreground=self.color)
+        style.map("TCheckbutton", background=[ ("active", self.gui_color) ], foreground=[ ("active", self.color) ])
     def build_overview_tab(self):
-        tk.Label(
-            self.overview_tab,
-            text="Overview",
-            font=("Segoe UI", 9, "bold")
-        ).place(x=10, y=10)
-        # Compatibility Options
-        compatibility_options = ttk.LabelFrame(
-            self.overview_tab,
-            text="Compatibility Options"
-        )
+        tk.Label(self.overview_tab, text="Overview", font=("Segoe UI", 9, "bold")).place(x=10, y=10) # Compatibility Options 
+        compatibility_options = ttk.LabelFrame(self.overview_tab, text="Compatibility Options")
         compatibility_options.place(x=10, y=30, width=300, height=150)
-        ttk.Checkbutton(
-            compatibility_options,
-            text="Option 1"
-        ).place(x=20, y=10)
-        ttk.Checkbutton(
-            compatibility_options,
-            text="Option 2"
-        ).place(x=20, y=40)
-        ttk.Checkbutton(
-            compatibility_options,
-            text="Option 3"
-        ).place(x=20, y=70)
-        ttk.Checkbutton(
-            compatibility_options,
-            text="Option 4"
-        ).place(x=20, y=100)
-        # AHK Tools
-        ahk_tools = ttk.LabelFrame(
-            self.overview_tab,
-            text="AHK Tools"
-        )
+        ttk.Checkbutton(compatibility_options, text="Option 1").place(x=20, y=10) 
+        ttk.Checkbutton(compatibility_options, text="Option 2").place(x=20, y=40) 
+        ttk.Checkbutton(compatibility_options, text="Option 3").place(x=20, y=70) 
+        ttk.Checkbutton(compatibility_options, text="Option 4").place(x=20, y=100) # AHK Tools 
+        ahk_tools = ttk.LabelFrame(self.overview_tab, text="AHK Tools")
         ahk_tools.place(x=320, y=30, width=300, height=150)
-        tk.Button(
-            ahk_tools,
-            text="AHK Visual Editor",
-            command=self.ahk_editor.show
-        ).place(x=20, y=25, width=200)
-        tk.Button(
-            ahk_tools,
-            text="AHK To Python",
-            command=self.ahk_converter.show
-        ).place(x=20, y=60, width=200)
-        tk.Button(
-            ahk_tools,
-            text="Window Spy",
-            command=self.window_spy.show
-        ).place(x=20, y=95, width=200)
-        # Solar Automate Links
-        solar_links = ttk.LabelFrame(
-            self.overview_tab,
-            text="Solar Automate Links"
-        )
+        tk.Button(ahk_tools, text="AHK Visual Editor", command=self.ahk_editor.show).place(x=20, y=25, width=200) 
+        tk.Button(ahk_tools, text="AHK To Python", command=self.ahk_converter.show).place(x=20, y=60, width=200) 
+        tk.Button(ahk_tools, text="Window Spy", command=self.window_spy.show).place(x=20, y=95, width=200) 
+        # Solar Automate Links 
+        solar_links = ttk.LabelFrame(self.overview_tab, text="Solar Automate Links")
         solar_links.place(x=10, y=190, width=300, height=120)
-        tk.Button(
-            solar_links,
-            text="Join Solar Automate Discord",
-            command=lambda: open_link(
-                "https://discord.com/invite/aMZY8yrF8r"
-            )
+        tk.Button(solar_links, text="Join Solar Automate Discord", command=lambda: open_link("https://discord.com/invite/aMZY8yrF8r")
         ).place(x=20, y=25, width=240)
-        tk.Button(
-            solar_links,
-            text="Upcoming Features",
-            command=lambda: open_link(
-                "https://docs.google.com/document/d/1WwWWMR-eN-R-GO42IioToHpWTgiXkLoiNE_4NeE-GsU/"
-            )
+        tk.Button(solar_links, text="Upcoming Features", command=lambda: open_link("https://docs.google.com/document/d/1WwWWMR-eN-R-GO42IioToHpWTgiXkLoiNE_4NeE-GsU/")
         ).place(x=20, y=60, width=240)
         # AutoHotKey Links
-        ahk_links = ttk.LabelFrame(
-            self.overview_tab,
-            text="AutoHotKey Links"
-        )
+        ahk_links = ttk.LabelFrame(self.overview_tab, text="AutoHotKey Links")
         ahk_links.place(x=320, y=190, width=300, height=120)
-        tk.Button(
-            ahk_links,
-            text="Using the Program",
-            command=lambda: open_link(
-                "https://www.autohotkey.com/docs/v2/Program.htm"
-            )
+        tk.Button(ahk_links, text="Using the Program", command=lambda: open_link("https://www.autohotkey.com/docs/v2/Program.htm")
         ).place(x=20, y=25, width=240)
-        tk.Button(
-            ahk_links,
-            text="How to Write Hotkeys",
-            command=lambda: open_link(
-                "https://www.autohotkey.com/docs/v2/howto/WriteHotkeys.htm"
-            )
+        tk.Button(ahk_links, text="How to Write Hotkeys", command=lambda: open_link("https://www.autohotkey.com/docs/v2/howto/WriteHotkeys.htm")
         ).place(x=20, y=60, width=240)
         # More AHK Documentation
-        ahk_docs = ttk.LabelFrame(
-            self.overview_tab,
-            text="AutoHotKey Documentation"
-        )
+        ahk_docs = ttk.LabelFrame(self.overview_tab, text="AutoHotKey Documentation")
         ahk_docs.place(x=10, y=320, width=610, height=150)
-        tk.Button(
-            ahk_docs,
-            text="How to Send Keystrokes",
-            command=lambda: open_link(
-                "https://www.autohotkey.com/docs/v2/howto/SendKeys.htm"
-            )
+        tk.Button(ahk_docs, text="How to Send Keystrokes", command=lambda: open_link("https://www.autohotkey.com/docs/v2/howto/SendKeys.htm")
         ).place(x=20, y=25, width=240)
-        tk.Button(
-            ahk_docs,
-            text="How to Run Programs",
-            command=lambda: open_link(
-                "https://www.autohotkey.com/docs/v2/howto/RunPrograms.htm"
-            )
+        tk.Button(ahk_docs, text="How to Run Programs", command=lambda: open_link("https://www.autohotkey.com/docs/v2/howto/RunPrograms.htm")
         ).place(x=320, y=25, width=240)
-        tk.Button(
-            ahk_docs,
-            text="How to Manage Windows",
-            command=lambda: open_link(
-                "https://www.autohotkey.com/docs/v2/howto/ManageWindows.htm"
-            )
+        tk.Button(ahk_docs, text="How to Manage Windows", command=lambda: open_link("https://www.autohotkey.com/docs/v2/howto/ManageWindows.htm")
         ).place(x=20, y=60, width=240)
-        tk.Button(
-            ahk_docs,
-            text="Quick Reference",
-            command=lambda: open_link(
-                "https://www.autohotkey.com/docs/v2/"
-            )
+        tk.Button(ahk_docs, text="Quick Reference", command=lambda: open_link("https://www.autohotkey.com/docs/v2/")
         ).place(x=320, y=60, width=240)
         # Help Files
-        help_files = ttk.LabelFrame(
-            self.overview_tab,
-            text="Help"
-        )
+        help_files = ttk.LabelFrame(self.overview_tab, text="Help")
         help_files.place(x=10, y=480, width=610, height=55)
         tk.Button(
             help_files,
@@ -1337,6 +1221,9 @@ class Playback(tk.Tk):
         self.skip_lines_end = []
         self.flow = None
         # 6. Background Threads
+        self.capture_frame = None
+        self.capture_id = 0
+        self.last_capture_id = self.capture_id
         if sys.platform == "darwin":
             self.capture_thread = threading.Thread(target=self.capture_loop_quartz, daemon=True)
         else:
@@ -1504,10 +1391,7 @@ class Playback(tk.Tk):
             # VariableName -= Value
             # VariableName *= Value
             # VariableName /= Value
-            variable_assignment_pattern = (
-                r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*'
-                r'(:=|\+=|-=|\*=|/=)\s*(.*?)\s*$'
-            )
+            variable_assignment_pattern = (r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*' r'(:=|\+=|-=|\*=|/=)\s*(.*?)\s*$')
             match = re.match(variable_assignment_pattern, current_line)
             if match:
                 variable_name = match.group(1)
@@ -1526,21 +1410,14 @@ class Playback(tk.Tk):
                 else:
                     # Compound assignments require an existing variable.
                     if variable_name not in self.local_variables:
-                        raise NameError(
-
-                            f"Variable '{variable_name}' is not defined"
-                        )
+                        raise NameError( f"Variable '{variable_name}' is not defined")
                     current_value = self.local_variables[variable_name]
                     # Convert both operands to numbers.
                     try:
                         left = float(current_value)
                         right = float(variable_value)
                     except (TypeError, ValueError):
-                        raise TypeError(
-
-                            f"Cannot apply {operator} to "
-                            f"'{current_value}' and '{variable_value}'"
-                        )
+                        raise TypeError( f"Cannot apply {operator} to " f"'{current_value}' and '{variable_value}'")
                     if operator == '+=':
                         result = left + right
                     elif operator == '-=':
@@ -1553,10 +1430,7 @@ class Playback(tk.Tk):
 
                         result = left / right
                     else:
-                        raise RuntimeError(
-
-                            f"Unsupported assignment operator: {operator}"
-                        )
+                        raise RuntimeError( f"Unsupported assignment operator: {operator}")
                     # Preserve integer results when both operands are integers.
                     if (
                         isinstance(current_value, int)
@@ -1630,7 +1504,7 @@ class Playback(tk.Tk):
             if processed_line.startswith("pixelsearch"):
                 self.cmd_pixelsearch(current_line)
             if processed_line.startswith("pixelgetcolor"):
-                self._cmd_pixelgetcolor(current_line)
+                self.cmd_pixelgetcolor(current_line)
             if processed_line.startswith("send"):
                 self._cmd_send(current_line)
             if processed_line.startswith("click"):
@@ -1832,9 +1706,7 @@ class Playback(tk.Tk):
             if arguments[2] == "Edit":
                 entry_var = tk.StringVar(value="")
                 self.gui_variables[v] = entry_var
-                entry = tk.Entry(self.current_tab2, bg="white", fg="black", textvariable=entry_var,
-                                 insertbackground="black", disabledbackground="white", 
-                                 disabledforeground="black", highlightbackground=self.gui_color)
+                entry = tk.Entry(self.current_tab2, bg="white", fg="black", textvariable=entry_var, insertbackground="black", disabledbackground="white", disabledforeground="black", highlightbackground=self.gui_color)
                 place_x = x - current_offset_x
                 place_y = y - current_offset_y - 5
                 entry.place(x=place_x, y=place_y, width=w, height=h)
@@ -1888,12 +1760,7 @@ class Playback(tk.Tk):
                 combo_var = tk.StringVar()
                 if values and values[0] != "":
                     combo_var.set(values[0])
-                combobox = ttk.Combobox(
-                    self.current_tab2,
-                    state="readonly",
-                    values=values,
-                    textvariable=combo_var
-                )
+                combobox = ttk.Combobox(self.current_tab2, state="readonly", values=values, textvariable=combo_var)
                 place_x = x - current_offset_x
                 place_y = y - current_offset_y
                 combobox.place(x=place_x, y=place_y, width=w) # Do not use height
@@ -1923,44 +1790,12 @@ class Playback(tk.Tk):
     # Update Style
     def update_style(self):
         style = ttk.Style()
-        style.configure(
-            "Dark.TNotebook",
-            background=self.gui_color
-        )
-        style.configure(
-            "Dark.TFrame",
-            background=self.gui_color
-        )
-        style.configure(
-            "Dark.TNotebook.Tab",
-            background=self.gui_color,
-            foreground=self.color
-        )
-        style.map(
-            "Dark.TNotebook.Tab",
-            background=[
-                ("selected", self.gui_color),
-                ("active", self.gui_color)
-            ],
-            foreground=[
-                ("selected", self.color),
-                ("active", self.color)
-            ]
-        )
-        style.configure(
-            "Dark.TCheckbutton",
-            background=self.gui_color,
-            foreground=self.color
-        )
-        style.map(
-            "Dark.TCheckbutton",
-            background=[
-                ("active", self.gui_color)
-            ],
-            foreground=[
-                ("active", self.color)
-            ]
-        )
+        style.configure("Dark.TNotebook", background=self.gui_color)
+        style.configure("Dark.TFrame", background=self.gui_color)
+        style.configure("Dark.TNotebook.Tab", background=self.gui_color, foreground=self.color)
+        style.map("Dark.TNotebook.Tab", background=[ ("selected", self.gui_color), ("active", self.gui_color) ], foreground=[ ("selected", self.color), ("active", self.color) ])
+        style.configure("Dark.TCheckbutton", background=self.gui_color, foreground=self.color)
+        style.map("Dark.TCheckbutton", background=[ ("active", self.gui_color) ], foreground=[ ("active", self.color) ])
     def _collect_settings_data(self):
         data = {}
         for key, var in self.gui_variables.items():
@@ -2064,13 +1899,8 @@ class Playback(tk.Tk):
             "Trim": lambda s: str(s).strip(),
             "Chr": lambda n: chr(int(n)),
             "Ord": lambda c: ord(str(c)[0]) if c else 0,
-            "IsInteger": lambda v: (
-                isinstance(v, int)
-                or (isinstance(v, str) and v.isdigit())
-            ),
-            "IsNumber": lambda v: (
-                str(v).replace(".", "", 1).isdigit()
-            ),
+            "IsInteger": lambda v: (isinstance(v, int) or (isinstance(v, str) and v.isdigit())),
+            "IsNumber": lambda v: (str(v).replace(".", "", 1).isdigit()),
             # Window Management
             "WinExist": WinExist
         }
@@ -2104,11 +1934,7 @@ class Playback(tk.Tk):
             # A subroutine ends at the next label, hotkey label, or real function.
             end_line = len(_script)
             for i in range(from_line + 1, len(_script)):
-                if (
-                    is_function_declaration(_script[i])
-                    or is_label_line(_script[i])
-                    or is_hotkey_line(_script[i])
-                ):
+                if (is_function_declaration(_script[i]) or is_label_line(_script[i]) or is_hotkey_line(_script[i])):
                     end_line = i
                     break
 
@@ -2212,7 +2038,7 @@ class Playback(tk.Tk):
 
     def _unwrap_parens(self, value):
         """
-        Strip wrapping ( ... ) pairs that enclose the whole string.
+        Strip wrapping (...) pairs that enclose the whole string.
         Inner parentheses belonging to function calls are left alone.
         """
         s = "" if value is None else str(value).strip()
@@ -2307,13 +2133,7 @@ class Playback(tk.Tk):
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
             inner = raw[1:-1]
             if "%" in inner:
-                return re.sub(
-
-                    r"%([A-Za-z_][A-Za-z0-9_]*)%",
-                    lambda m: (
-                        "" if self._lookup_variable(m.group(1), None) is None
-                        else str(self._lookup_variable(m.group(1), ""))
-                    ),
+                return re.sub( r"%([A-Za-z_][A-Za-z0-9_]*)%", lambda m: ("" if self._lookup_variable(m.group(1), None) is None else str(self._lookup_variable(m.group(1), ""))),
                     inner,
                 )
             return inner
@@ -2469,7 +2289,7 @@ class Playback(tk.Tk):
 
             i += 1
             self.local_variables["A_Index"] = i
-            self.execute_script(start_line, loop_end, _script)
+            self.execute_script(start_line, loop_end, _script, True)
             flow = self.flow
             if flow == "continue":
                 self.flow = None
@@ -2595,11 +2415,7 @@ class Playback(tk.Tk):
         except Exception as glob_err:
             matches = []
             try:
-                messagebox.showerror(
-                    "Error",
-                    f"Error expanding Loop, Files pattern:\n"
-                    f"{file_pattern}\n\n{glob_err}"
-                )
+                messagebox.showerror("Error", f"Error expanding Loop, Files pattern:\n" f"{file_pattern}\n\n{glob_err}")
             except:
                 pass
 
@@ -2778,13 +2594,7 @@ class Playback(tk.Tk):
 
         # One operator only: left +|-|*|/ right
         # Operands may be numbers, identifiers, or %Var% (including a leading minus).
-        math_pattern = (
-            r"^\s*"
-            r"(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)"
-            r"\s*([+\-*/])\s*"
-            r"(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)"
-            r"\s*$"
-        )
+        math_pattern = (r"^\s*" r"(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)" r"\s*([+\-*/])\s*" r"(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)" r"\s*$")
         match = re.match(math_pattern, raw)
         if match:
             try:
@@ -2926,12 +2736,7 @@ class Playback(tk.Tk):
                 arg = args[i].strip()
                 if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
                     inner = arg[1:-1]
-                    args[i] = re.sub(
-                        r"%([A-Za-z_][A-Za-z0-9_]*)%",
-                        lambda m: (
-                            "" if self._lookup_variable(m.group(1), None) is None
-                            else str(self._lookup_variable(m.group(1), ""))
-                        ),
+                    args[i] = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", lambda m: ("" if self._lookup_variable(m.group(1), None) is None else str(self._lookup_variable(m.group(1), ""))),
                         inner,
                     )
                 else:
@@ -2997,12 +2802,7 @@ class Playback(tk.Tk):
                         if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
                             # Quoted args stay literal except %Var%.
                             inner = arg[1:-1]
-                            args[i] = re.sub(
-                                r"%([A-Za-z_][A-Za-z0-9_]*)%",
-                                lambda m: (
-                                    "" if self._lookup_variable(m.group(1), None) is None
-                                    else str(self._lookup_variable(m.group(1), ""))
-                                ),
+                            args[i] = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", lambda m: ("" if self._lookup_variable(m.group(1), None) is None else str(self._lookup_variable(m.group(1), ""))),
                                 inner,
                             )
                         else:
@@ -3136,10 +2936,7 @@ class Playback(tk.Tk):
         # IniWrite, Value, Filename, Section, Key
         elif command == "iniwrite":
             if len(parts) < 5:
-                raise SyntaxError(
-
-                    f"{current_line}: IniWrite requires Value, Filename, Section, Key"
-                )
+                raise SyntaxError( f"{current_line}: IniWrite requires Value, Filename, Section, Key")
             value, filename, section, key = parts[1:5]
             # Resolve %Var% References
             value = self.handle_variable(value)
@@ -3296,18 +3093,14 @@ class Playback(tk.Tk):
             def win_owner(hwnd):
                 pid = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                handle = kernel32.OpenProcess(
-                    PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value
-                )
+                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
                 if not handle:
                     return "Unknown", ""
 
                 try:
                     size = wintypes.DWORD(260)
                     buf = ctypes.create_unicode_buffer(size.value)
-                    if kernel32.QueryFullProcessImageNameW(
-                        handle, 0, buf, ctypes.byref(size)
-                    ):
+                    if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
                         exe = os.path.basename(buf.value) or ""
                         owner = os.path.splitext(exe)[0] or "Unknown"
                         return owner, exe
@@ -3329,38 +3122,17 @@ class Playback(tk.Tk):
                     except Exception:
                         class_name = ""
                 self.active_windows[owner] = title
-                self.window_list.append({
-                    "hwnd": int(hwnd) if hwnd else 0,
-                    "title": title,
-                    "exe": exe,
-                    "class_name": class_name,
-                    "left": int(getattr(window, "left", 0) or 0),
-                    "top": int(getattr(window, "top", 0) or 0),
-                    "width": int(getattr(window, "width", 0) or 0),
-                    "height": int(getattr(window, "height", 0) or 0),
-                })
+                self.window_list.append({ "hwnd": int(hwnd) if hwnd else 0, "title": title, "exe": exe, "class_name": class_name, "left": int(getattr(window, "left", 0) or 0), "top": int(getattr(window, "top", 0) or 0), "width": int(getattr(window, "width", 0) or 0), "height": int(getattr(window, "height", 0) or 0), })
         elif sys.platform == "darwin":
             # Get a list of on-screen windows (excluding desktop elements)
-            window_list = Quartz.CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListExcludeDesktopElements | Quartz.kCGWindowListOptionOnScreenOnly,
-                Quartz.kCGNullWindowID
-            )
+            window_list = Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListExcludeDesktopElements | Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
             for window in window_list:
                 owner = window.get(Quartz.kCGWindowOwnerName, "Unknown") or "Unknown"
                 title = window.get(Quartz.kCGWindowName, "<no title>") or "<no title>"
                 bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
                 hwnd = window.get(Quartz.kCGWindowNumber, 0) or 0
                 self.active_windows[owner] = title
-                self.window_list.append({
-                    "hwnd": int(hwnd) if hwnd else 0,
-                    "title": title,
-                    "exe": owner if owner != "Unknown" else "",
-                    "class_name": "",
-                    "left": int(bounds.get("X", 0) or 0),
-                    "top": int(bounds.get("Y", 0) or 0),
-                    "width": int(bounds.get("Width", 0) or 0),
-                    "height": int(bounds.get("Height", 0) or 0),
-                })
+                self.window_list.append({ "hwnd": int(hwnd) if hwnd else 0, "title": title, "exe": owner if owner != "Unknown" else "", "class_name": "", "left": int(bounds.get("X", 0) or 0), "top": int(bounds.get("Y", 0) or 0), "width": int(bounds.get("Width", 0) or 0), "height": int(bounds.get("Height", 0) or 0), })
         elif sys.platform.startswith("linux"):
             # Import is `display as Xdisplay`; reuse the shared connection.
             disp = _get_xdisplay()
@@ -3433,16 +3205,7 @@ class Playback(tk.Tk):
                     pass
 
                 self.active_windows[owner] = title
-                self.window_list.append({
-                    "hwnd": int(win_id),
-                    "title": title,
-                    "exe": owner if owner != "Unknown" else (class_instance or ""),
-                    "class_name": class_name,
-                    "left": left,
-                    "top": top,
-                    "width": width,
-                    "height": height,
-                })
+                self.window_list.append({ "hwnd": int(win_id), "title": title, "exe": owner if owner != "Unknown" else (class_instance or ""), "class_name": class_name, "left": left, "top": top, "width": width, "height": height, })
     def _parse_window_criteria(self, criteria):
         """
         Parse AHK-style window matching criteria.
@@ -3580,8 +3343,7 @@ class Playback(tk.Tk):
                         end if
                     end tell
                     '''
-                subprocess.run(["osascript", "-e", script],
-                               capture_output=True, text=True, timeout=3)
+                subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=3)
             except Exception:
                 print(traceback.format_exc())
 
@@ -3847,7 +3609,7 @@ class Playback(tk.Tk):
 
                     start = self.labels_start[label]
                     end = self.labels_end[label]
-                    self.execute_script(start, end, self.script, True)
+                    self.execute_script(start, end, self.script, False)
                 if self.flow == "return":
                     self.flow = None
             except Exception:
@@ -3859,10 +3621,7 @@ class Playback(tk.Tk):
                 current_thread = threading.current_thread()
                 if self._hotkey_threads.get(combo) is current_thread:
                     self._hotkey_threads.pop(combo, None)
-        thread = threading.Thread(
-            target=run,
-            daemon=True
-        )
+        thread = threading.Thread(target=run, daemon=True)
         self._hotkey_threads[combo] = thread
         thread.start()
     def on_key_press(self, key):
@@ -3875,10 +3634,7 @@ class Playback(tk.Tk):
             self._active_hotkey_modifiers.add(normalized)
             return
 
-        combo = self.find_hotkey_combo(
-            self._active_hotkey_modifiers,
-            normalized
-        )
+        combo = self.find_hotkey_combo(self._active_hotkey_modifiers, normalized)
         try:
             target = self.hotkeys[combo]
         except KeyError:
@@ -3896,6 +3652,33 @@ class Playback(tk.Tk):
 
         if normalized in self._MODIFIER_KEYS:
             self._active_hotkey_modifiers.discard(normalized)
+    def capture_single_frame(self):
+        """
+        Capture a single full-screen frame.
+        Used as a fallback when capture_loop_* returns no frame.
+        """
+        if sys.platform == "darwin":
+            image = Quartz.CGWindowListCreateImage(
+                Quartz.CGRectInfinite,
+                Quartz.kCGWindowListOptionOnScreenOnly,
+                Quartz.kCGNullWindowID,
+                Quartz.kCGWindowImageDefault
+            )
+            if image is None:
+                return None
+
+            return cgimage_to_srgb_numpy(image)
+
+        else:
+            scale = self._get_scale_factor()
+            with MSS() as sct:
+                monitor = {
+                    "top": 0,
+                    "left": 0,
+                    "width": int(SCREEN_WIDTH * scale),
+                    "height": int(SCREEN_HEIGHT * scale),
+                }
+                return np.asarray(sct.grab(monitor))[:, :, :3]
     def capture_loop_mss(self):
         """Continuous capture loop for the macro."""
         self.capture_id = 0
@@ -3919,12 +3702,7 @@ class Playback(tk.Tk):
         while True:
             if self.scan_delay < 1.0:
                 if sys.platform == "darwin":
-                    image = Quartz.CGWindowListCreateImage(
-                        Quartz.CGRectInfinite,
-                        Quartz.kCGWindowListOptionOnScreenOnly,
-                        Quartz.kCGNullWindowID,
-                        Quartz.kCGWindowImageDefault
-                    )
+                    image = Quartz.CGWindowListCreateImage(Quartz.CGRectInfinite, Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID, Quartz.kCGWindowImageDefault)
                 else:
                     image = None
                 if image is None:
@@ -4069,15 +3847,19 @@ class Playback(tk.Tk):
 
     def cmd_pixelsearch(self, line):
         # Process Line
+        # PixelSearch, OutputVarX, OutputVarY, X1, Y1, X2, Y2, ColorID [, Variation, Mode]
+        # Output vars stay as names. Coordinates, color, and variation
+        # accept literals, %Var%, and bare identifiers (FishBarLeft, etc.).
         try:
             self.scan_delay = 0.01
+            self.last_capture_id = self.capture_id
             _, args = line.split(",", 1)
             arguments = [p.strip() for p in args.split(",")]
-            # 1. Convert coordinate arguments to integers safely
-            x1 = int(arguments[2])
-            y1 = int(arguments[3])
-            x2 = int(arguments[4])
-            y2 = int(arguments[5])
+            # 1. Resolve coordinate arguments (literals, %Var%, bare names, simple math)
+            x1 = self._resolve_number(arguments[2], as_int=True)
+            y1 = self._resolve_number(arguments[3], as_int=True)
+            x2 = self._resolve_number(arguments[4], as_int=True)
+            y2 = self._resolve_number(arguments[5], as_int=True)
             # 2. Handle search mode properly (keeping it within 0 or 1 as pixel_search expects)
             search_mode = 0
             if x1 > x2 or y1 > y2:
@@ -4087,30 +3869,49 @@ class Playback(tk.Tk):
             top = min(y1, y2)
             right = max(x1, x2)
             bottom = max(y1, y2)
+            if self.capture_frame is None:
+                self.capture_frame = self.capture_single_frame()
             img = self.capture_frame[top:bottom, left:right]
-            color = self.bgr_to_hex(arguments[6])
-            tolerance = arguments[7]  # pixel_search handles int conversion internally
+            color_raw = self.handle_variable(arguments[6]) if len(arguments) > 6 else ""
+            color = self.bgr_to_hex(color_raw)
+            tolerance = self._resolve_number(arguments[7], as_int=True) if len(arguments) > 7 else 0
             x, y = self.pixel_search(img, color, tolerance, search_mode)
-            # Adjust x, y back to global frame coordinates if needed, 
+            # Adjust x, y back to global frame coordinates if needed,
             # depending on whether pixel_search returns local or global offsets.
-            self.local_variables[arguments[0]] = x + left
-            self.local_variables[arguments[1]] = y + top
+            # Only assign when a match was found (pixel_search returns None, None otherwise).
+            # AHK: ErrorLevel = 0 if found, 1 if not found.
+            if x is not None and y is not None:
+                self.local_variables[arguments[0]] = x + left
+                self.local_variables[arguments[1]] = y + top
+                self.local_variables["ErrorLevel"] = 0
+            else:
+                self.local_variables["ErrorLevel"] = 1
         except Exception:
             print(traceback.format_exc())
+            self.local_variables["ErrorLevel"] = 1
 
     def cmd_pixelgetcolor(self, line):
         # Process Line
+        # PixelGetColor, OutputVar, X, Y [, Mode]
         try:
             self.scan_delay = 0.01
+            self.last_capture_id = self.capture_id
             _, args = line.split(",", 1)
             arguments = [p.strip() for p in args.split(",")]
-            x = int(arguments[1])
-            y = int(arguments[2])
+            x = self._resolve_number(arguments[1], as_int=True)
+            y = self._resolve_number(arguments[2], as_int=True)
+            if self.capture_frame is None:
+                self.capture_frame = self.capture_single_frame()
             b, g, r = self.pixel_get_color(self.capture_frame, x, y)
+            if b is None:
+                self.local_variables["ErrorLevel"] = 1
+                return
             hex = self.bgr_to_python(b, g, r)
             self.local_variables[arguments[0]] = hex
+            self.local_variables["ErrorLevel"] = 0
         except Exception:
             print(traceback.format_exc())
+            self.local_variables["ErrorLevel"] = 1
     def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
         """
         Send a keyboard event.
@@ -4228,10 +4029,7 @@ class Playback(tk.Tk):
                     "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
                     "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
                 }
-                down_flag, up_flag = button_flags.get(
-                    button,
-                    button_flags["left"]
-                )
+                down_flag, up_flag = button_flags.get(button, button_flags["left"])
                 if action == "down":
                     windll.mouse_event(down_flag, 0, 0, 0, 0)
                 elif action == "up":
@@ -4265,10 +4063,7 @@ class Playback(tk.Tk):
                 "right": mouse.Button.right,
                 "middle": mouse.Button.middle,
             }
-            mouse_button = button_map.get(
-                button,
-                mouse.Button.left
-            )
+            mouse_button = button_map.get(button, mouse.Button.left)
             if action == "down":
                 mouse_controller.press(mouse_button)
             elif action == "up":
@@ -4419,13 +4214,7 @@ class Playback(tk.Tk):
                     click_action = "up"
             # Sendmode Determines The Backend Used By Click.
             backend = self.send_backend
-            self._click_at(
-                x,
-                y,
-                backend,
-                button=button,
-                action=click_action
-            )
+            self._click_at(x, y, backend, button=button, action=click_action)
         except Exception as e:
             error = traceback.format_exc()
             print(error)

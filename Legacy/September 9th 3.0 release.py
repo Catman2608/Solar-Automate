@@ -1826,7 +1826,7 @@ class Playback(tk.Tk):
                 self.labels[name] = body_lines
                 # Skip The Label Body
                 self.current_line_count = end_index
-            # Hotkey Labels  (E.G. F1::  Or  ^!S:: )
+            # Hotkey Labels  (E.G. F1::  Or  ^!S::)
             else:
                 m = re.match(r"^([^\s:]+)::$", line)
                 if m:
@@ -2903,7 +2903,7 @@ class Playback(tk.Tk):
             self.variables[out_var] = f"0x{color_val:06X}"
             self.variables["ErrorLevel"] = 0
         except Exception as e:
-            self.raise_error(action, str(e))
+            print(traceback.format_exc())
     def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
         """
         Send a keyboard event.
@@ -3169,8 +3169,10 @@ class Playback(tk.Tk):
             pos = mouse_controller.position
             self.variables[out_x] = int(pos[0])
             self.variables[out_y] = int(pos[1])
+            return 0
+
         except Exception as e:
-            self.raise_error(action, str(e))
+            return e
     def cmd_ini(self, action):
         parts = [x.strip() for x in action.split(",")]
         command = parts[0].lower()
@@ -3786,6 +3788,7 @@ class Playback(tk.Tk):
         Process a list of script lines (supports nested loops via recursion on blocks).
         Uses self.current_line_count to get the line.
         """
+        cmd_error = 0
         saved_line_count = self.current_line_count
         actions = self._normalize_inline_else_lines(actions)
         # Pre-Scan Function And Label Definitions
@@ -3941,7 +3944,7 @@ class Playback(tk.Tk):
             if processed_line.startswith("PixelSearch"):
                 self.cmd_pixelsearch(processed_line)
             if processed_line.startswith("PixelGetColor"):
-                self._cmd_pixelgetcolor(processed_line)
+                cmd_error = self._cmd_pixelgetcolor(processed_line)
             if processed_line.startswith("Send"):
                 self._cmd_send(processed_line)
             if processed_line.startswith("Click"):
@@ -3951,7 +3954,7 @@ class Playback(tk.Tk):
             if processed_line.startswith("MouseMove"):
                 self._cmd_mousemove(processed_line)
             if processed_line.startswith("MouseGetPos"):
-                self._cmd_mousegetpos(processed_line)
+                cmd_error = self._cmd_mousegetpos(processed_line)
             if processed_line.lower().startswith("winactivate"):
                 self.cmd_winactivate(processed_line)
             if processed_line.lower().startswith("wingetpos"):
@@ -3968,6 +3971,9 @@ class Playback(tk.Tk):
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             if processed_line.startswith("ExitApp"):
                 self.destroy()
+            if cmd_error != 0:
+                self._cmd_msgbox(f"MsgBox, {cmd_error}")
+                cmd_error = 0
             self.current_line_count += 1
         self.current_line_count = saved_line_count
         return
