@@ -86,6 +86,17 @@ CONTROL_KEYWORDS = {
     "if", "else", "while", "loop",
     "for", "switch", "catch", "try"
 }
+SEND_MOUSE_TOKENS = {
+    "lbutton":   ("left",   "button"),
+    "rbutton":   ("right",  "button"),
+    "mbutton":   ("middle", "button"),
+    "xbutton1":  ("x1",     "button"),
+    "xbutton2":  ("x2",     "button"),
+    "wheelup":   (None,     "wheelup"),
+    "wheeldown": (None,     "wheeldown"),
+    "wheelleft": (None,     "wheelleft"),
+    "wheelright":(None,     "wheelright"),
+}
 # Windows (Transparency and Ctypes WinDLL)
 if sys.platform == "win32":
     windll = ctypes.windll.user32
@@ -1167,6 +1178,11 @@ class Playback(tk.Tk):
         self.loop_end = 0
         self.key_delay = 100
         self.send_backend = "Event"
+        self.use_click = ["LButton", "wheel"]
+        # GetKeyState support state
+        self._mac_ax_checked = False
+        self._mac_ax_ok = False
+        self._warned_keys = set()
         # GUI Registry Dictionaries
         self.gui_variables = {}
         self.gui_controls = {}
@@ -1217,6 +1233,9 @@ class Playback(tk.Tk):
         self.labels_start = {}
         self.labels_end = {}
         self.local_variables = {}
+        # Physical mouse button state tracked by our own Send/Click actions
+        # (supplements OS queries; used as fallback and for Linux)
+        self._mouse_buttons_down = set()
         self.skip_lines_start = []
         self.skip_lines_end = []
         self.flow = None
@@ -1300,6 +1319,15 @@ class Playback(tk.Tk):
                 if condition.endswith("{"):
                     condition = condition[:-1].strip()
                 condition = self._unwrap_parens(condition)
+                # Unary not / ! support (AHK: if not GetKeyState(...))
+                negate = False
+                cond_l = condition.lstrip()
+                if cond_l.lower().startswith("not "):
+                    negate = True
+                    condition = cond_l[4:].lstrip()
+                elif cond_l.startswith("!"):
+                    negate = True
+                    condition = cond_l[1:].lstrip()
                 split = self._split_if_condition(condition)
                 if split is None:
                     # Bare variable / function / literal: AHK truthy check.
@@ -1322,6 +1350,8 @@ class Playback(tk.Tk):
                         operator = "=="
                     processed_condition = f"{left!r} {operator} {right!r}"
                     result = eval(processed_condition)
+                if negate:
+                    result = not result
                 skip_until = self.cmd_if(line_count, result, _script)
                 continue
 
@@ -1880,6 +1910,164 @@ class Playback(tk.Tk):
 
             return info.get("hwnd", 0) or 0
 
+        def GetKeyState(key, mode=""):
+            """
+            AHK-compatible GetKeyState(KeyName [, Mode]).
+            Returns 1 if the key/button is down, 0 otherwise.
+            Mode "P" requests physical state (identical to default here).
+            Mode "T" is not supported (returns 0 like AHK when no hook is present).
+
+            Supports mouse buttons (LButton/RButton/MButton) and the
+            modifier keys (Shift/Ctrl/Alt/Win) on all three platforms.
+            """
+            key_l = str(key).strip().lower()
+
+            # --- Resolve the key to a canonical name -----------------------------
+            mouse_map = {
+                "lbutton": "left",  "left":  "left",  "lb": "left",
+                "rbutton": "right", "right": "right", "rb": "right",
+                "mbutton": "middle","middle":"middle","mb": "middle",
+            }
+            # Physical VKs for modifiers (Win32). L/R variants so we can tell them apart.
+            keyboard_vk = {
+                "shift":   (0x10, 0xA0, 0xA1),   # VK_SHIFT, VK_LSHIFT, VK_RSHIFT
+                "lshift":  (0xA0,),
+                "rshift":  (0xA1,),
+                "ctrl":    (0x11, 0xA2, 0xA3),   # VK_CONTROL, VK_LCONTROL, VK_RCONTROL
+                "control": (0x11, 0xA2, 0xA3),
+                "lctrl":   (0xA2,),
+                "rctrl":   (0xA3,),
+                "alt":     (0x12, 0xA4, 0xA5),   # VK_MENU, VK_LMENU, VK_RMENU
+                "lalt":    (0xA4,),
+                "ralt":    (0xA5,),
+                "lwin":    (0x5B,),
+                "rwin":    (0x5C,),
+                "win":     (0x5B, 0x5C),
+            }
+            # macOS virtual keycodes for modifiers (kVK_Shift, etc.)
+            mac_kc = {
+                "shift":  (56,), "lshift": (56,), "rshift": (60,),
+                "ctrl":   (59,), "control":(59,), "lctrl":  (59,), "rctrl": (62,),
+                "alt":    (58,), "lalt":   (58,), "ralt":   (61,),
+                "option": (58,),
+                "cmd":    (55,), "lwin":   (55,), "rwin":   (54,),
+                "win":    (55, 54), "command": (55,),
+            }
+            # Linux keysym names for modifiers (queried via XQueryKeymap)
+            linux_keysyms = {
+                "shift":  ("Shift_L", "Shift_R"), "lshift": ("Shift_L",), "rshift": ("Shift_R",),
+                "ctrl":   ("Control_L", "Control_R"), "control": ("Control_L", "Control_R"),
+                "lctrl":  ("Control_L",), "rctrl": ("Control_R",),
+                "alt":    ("Alt_L", "Alt_R"), "lalt": ("Alt_L",), "ralt": ("Alt_R",),
+                "win":    ("Super_L", "Super_R"), "lwin": ("Super_L",), "rwin": ("Super_R",),
+            }
+
+            is_mouse = key_l in mouse_map
+            is_kb    = key_l in keyboard_vk
+
+            if not (is_mouse or is_kb):
+                # Unknown key: match AHK by returning 0 rather than raising.
+                return 0
+
+            btn = mouse_map.get(key_l)
+
+            # --- 1. Trust our own tracked mouse state first ----------------------
+            # This avoids the OS-query race between press and release of a
+            # bot-injected click, and works even where OS queries are unavailable.
+            if is_mouse and btn in self._mouse_buttons_down:
+                return 1
+
+            # --- 2. Query the OS ------------------------------------------------
+            try:
+                if sys.platform == "win32":
+                    user32 = ctypes.windll.user32
+                    if is_mouse:
+                        vk_map = {"left": 0x01, "right": 0x02, "middle": 0x04}
+                        vk = vk_map[btn]
+                    else:
+                        vks = keyboard_vk[key_l]
+                        # Prefer the L/R-specific VK when available: the combined
+                        # VK_SHIFT (0x10) etc. work too, but L/R is more precise.
+                        vk = vks[-1]
+                    state = user32.GetAsyncKeyState(vk)
+                    return 1 if (state & 0x8000) else 0
+
+                elif sys.platform == "darwin":
+                    # Accessibility permission is required for CGEventSource*State.
+                    # Detect once, warn once, and fall back to our tracked state.
+                    if not self._mac_ax_checked:
+                        self._mac_ax_checked = True
+                        try:
+                            self._mac_ax_ok = bool(Quartz.AXIsProcessTrusted())
+                        except Exception:
+                            self._mac_ax_ok = True
+                        if not self._mac_ax_ok:
+                            self._warn_once(
+                                "macos_ax",
+                                "GetKeyState: macOS Accessibility permission is not "
+                                "granted. User-held keys cannot be detected. "
+                                "Grant access in System Settings > Privacy & Security "
+                                "> Accessibility, then restart Solar Automate."
+                            )
+
+                    if not self._mac_ax_ok:
+                        # We only know about our own held buttons (checked above).
+                        return 0
+
+                    if is_mouse:
+                        btn_map = {"left": 0, "right": 1, "middle": 2}
+                        qbtn = btn_map[btn]
+                        pressed = Quartz.CGEventSourceButtonState(
+                            Quartz.kCGEventSourceStateCombinedSessionState, qbtn
+                        )
+                        return 1 if pressed else 0
+                    else:
+                        for kc in mac_kc.get(key_l, ()):
+                            if Quartz.CGEventSourceKeyState(
+                                Quartz.kCGEventSourceStateCombinedSessionState, kc
+                            ):
+                                return 1
+                        return 0
+
+                elif sys.platform.startswith("linux"):
+                    d = _get_xdisplay()
+                    root = d.screen().root
+                    pointer = root.query_pointer()
+
+                    if is_mouse:
+                        mask_map = {
+                            "left":   X.Button1Mask,
+                            "middle": X.Button2Mask,
+                            "right":  X.Button3Mask,
+                        }
+                        return 1 if (pointer.mask & mask_map[btn]) else 0
+                    else:
+                        # XQueryKeymap returns a bitmap of all keycodes currently down.
+                        # Map keysym -> keycode, then test the corresponding bit.
+                        keymap = d.query_keymap()  # 32-byte bytes object
+                        for ks_name in linux_keysyms.get(key_l, ()):
+                            keysym = XK.string_to_keysym(ks_name)
+                            if keysym == 0:
+                                continue
+                            keycode = d.keysym_to_keycode(keysym)
+                            if keycode == 0:
+                                continue
+                            byte_i, bit_i = divmod(keycode, 8)
+                            if keymap[byte_i] & (1 << bit_i):
+                                return 1
+                        return 0
+
+                return 0
+
+            except Exception:
+                # Never let a platform quirk crash the macro; log once.
+                self._warn_once(
+                    f"getkeystate_{sys.platform}",
+                    f"GetKeyState({key!r}) failed on {sys.platform}; "
+                    f"returning 0.\n{traceback.format_exc()}"
+                )
+                return 0
+
         self.builtin_functions = {
             "A_TickCount": int(time.monotonic() * 1000),
             # Basic Functions
@@ -1902,7 +2090,8 @@ class Playback(tk.Tk):
             "IsInteger": lambda v: (isinstance(v, int) or (isinstance(v, str) and v.isdigit())),
             "IsNumber": lambda v: (str(v).replace(".", "", 1).isdigit()),
             # Window Management
-            "WinExist": WinExist
+            "WinExist": WinExist,
+            "GetKeyState": GetKeyState,
         }
     def find_labels(self, script=None):
         # Initialize Defaults
@@ -2289,7 +2478,7 @@ class Playback(tk.Tk):
 
             i += 1
             self.local_variables["A_Index"] = i
-            self.execute_script(start_line, loop_end, _script, True)
+            self.execute_script(start_line, loop_end, _script)
             flow = self.flow
             if flow == "continue":
                 self.flow = None
@@ -2552,7 +2741,9 @@ class Playback(tk.Tk):
 
         expr = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", replace_ident, expr)
         expr = expr.replace(" ", "")
-        if not re.fullmatch(r"[\d.+\-*/()]+", expr or ""):
+        # Reject call-like forms (digit or ) immediately followed by ()
+        # that would produce SyntaxWarning: 'int' object is not callable
+        if not re.fullmatch(r"[\d.+\-*/()]+", expr or "") or re.search(r"[\d)]\(", expr):
             return value
 
         try:
@@ -3928,21 +4119,39 @@ class Playback(tk.Tk):
             delay = abs(float(delay2)) / 1000.0
         except (ValueError, TypeError):
             delay = 0.1
-        # Mouse buttons requested via Send (AHK {LButton}/{RButton}/{MButton})
-        mouse_buttons = {
-            "lbutton": "left",
-            "rbutton": "right",
-            "mbutton": "middle",
-        }
+        # Mouse buttons requested via Send (AHK {LButton}/{RButton}/{MButton}/etc.)
+        # Use the shared SEND_MOUSE_TOKENS so the mapping lives in one place.
         key_lower = key.lower()
-        if key_lower in mouse_buttons:
-            button = mouse_buttons[key_lower]
+        if key_lower in SEND_MOUSE_TOKENS:
+            button, kind = SEND_MOUSE_TOKENS[key_lower]
+            if kind.startswith("wheel"):
+                # Discrete wheel tick; down/up click_type is ignored.
+                direction = kind[len("wheel"):]
+                self._click_at(None, None, backend2, button=None,
+                               action=f"wheel{direction}", click_count=1)
+                return
             if click_type == 1:
                 action = "down"
             elif click_type == 2:
                 action = "up"
             else:
                 action = "click"
+            # Track physical button state for GetKeyState
+            if button in ("left", "right", "middle"):
+                if action == "down":
+                    self._mouse_buttons_down.add(button)
+                elif action == "up":
+                    self._mouse_buttons_down.discard(button)
+                elif action == "click":
+                    # Track the button for the duration of the click so a concurrent
+                    # GetKeyState call (e.g. from a hotkey thread on MaxThreadsPerHotkey 2)
+                    # observes the button as down instead of racing the OS input queue.
+                    self._mouse_buttons_down.add(button)
+                    try:
+                        self._click_at(None, None, backend2, button=button, action=action)
+                    finally:
+                        self._mouse_buttons_down.discard(button)
+                    return
             # Pass original backend so _click_at receives the same value used by Click.
             self._click_at(None, None, backend2, button=button, action=action)
             return
@@ -3951,7 +4160,8 @@ class Playback(tk.Tk):
         # Plain multi-character strings that do not match these (e.g. "10", "abc")
         # are sent as individual character keystrokes, matching AHK Send behavior.
         special_names = {
-            "lbutton", "rbutton", "mbutton",
+            "lbutton", "rbutton", "mbutton", "xbutton1", "xbutton2",
+            "wheelup", "wheeldown", "wheelleft", "wheelright",
             "enter", "return", "tab", "space", "esc", "escape", "backspace", "delete",
             "up", "down", "left", "right", "shift", "ctrl", "control", "alt",
             "pause", "capslock", "pageup", "pgup", "pagedown", "pgdn", "end", "home",
@@ -4016,6 +4226,60 @@ class Playback(tk.Tk):
                 scale = get_scale_factor()
                 x = int(x / scale)
                 y = int(y / scale)
+        # --- Wheel events (no button, discrete direction) -------------------
+        wheel_map = {
+            "wheelup":   "up",
+            "wheeldown": "down",
+            "wheelleft": "left",
+            "wheelright":"right",
+        }
+        if action in wheel_map:
+            direction = wheel_map[action]
+            backend_l = str(backend).lower() if backend else ""
+
+            if backend_l == "input":
+                if sys.platform == "win32":
+                    # MOUSEEVENTF_WHEEL / HWHEEL. Windows convention: positive = up/right.
+                    MOUSEEVENTF_WHEEL  = 0x0800
+                    MOUSEEVENTF_HWHEEL = 0x1000
+                    WHEEL_DELTA = 120
+                    if direction == "up":
+                        windll.mouse_event(MOUSEEVENTF_WHEEL, 0, 0,  WHEEL_DELTA, 0)
+                    elif direction == "down":
+                        windll.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, -WHEEL_DELTA, 0)
+                    elif direction == "right":
+                        windll.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0,  WHEEL_DELTA, 0)
+                    elif direction == "left":
+                        windll.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, -WHEEL_DELTA, 0)
+                else:
+                    # macOS / Linux: synthesize via pynput's mouse_controller.
+                    # pynput does not expose horizontal scroll portably; approximate
+                    # left/right with horizontal scroll on Windows only (handled
+                    # above), and fall through to vertical for macOS/Linux.
+                    if direction == "up":
+                        mouse_controller.scroll(0, 1)
+                    elif direction == "down":
+                        mouse_controller.scroll(0, -1)
+                    # left/right: not portable here — no-op on macOS/Linux.
+
+            elif backend_l == "event":
+                if direction == "up":
+                    mouse_controller.scroll(0, 1)
+                elif direction == "down":
+                    mouse_controller.scroll(0, -1)
+                # horizontal wheel is not portable via pynput; no-op.
+
+            elif backend_l == "play":
+                if direction == "up":
+                    pyautogui.scroll(1)
+                elif direction == "down":
+                    pyautogui.scroll(-1)
+                elif direction == "right":
+                    pyautogui.hscroll(1)
+                elif direction == "left":
+                    pyautogui.hscroll(-1)
+
+            return
         # Resolve Backend-Specific Button Names.
         backend = str(backend).lower() if backend else ""
         if backend == "input":
@@ -4029,6 +4293,24 @@ class Playback(tk.Tk):
                     "right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
                     "middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
                 }
+                # X1 / X2 use MOUSEEVENTF_XDOWN / XUP with a per-button data value.
+                MOUSEEVENTF_XDOWN = 0x0080
+                MOUSEEVENTF_XUP   = 0x0100
+                XBUTTON1 = 0x0001
+                XBUTTON2 = 0x0002
+                if button in ("x1", "x2"):
+                    xdata = XBUTTON1 if button == "x1" else XBUTTON2
+                    if action == "down":
+                        windll.mouse_event(MOUSEEVENTF_XDOWN, 0, 0, xdata, 0)
+                    elif action == "up":
+                        windll.mouse_event(MOUSEEVENTF_XUP, 0, 0, xdata, 0)
+                    else:
+                        for i in range(click_count):
+                            windll.mouse_event(MOUSEEVENTF_XDOWN, 0, 0, xdata, 0)
+                            windll.mouse_event(MOUSEEVENTF_XUP,   0, 0, xdata, 0)
+                            if i < click_count - 1:
+                                time.sleep(0.03)
+                    return
                 down_flag, up_flag = button_flags.get(button, button_flags["left"])
                 if action == "down":
                     windll.mouse_event(down_flag, 0, 0, 0, 0)
@@ -4041,6 +4323,9 @@ class Playback(tk.Tk):
                         if i < click_count - 1:
                             time.sleep(0.03)
             else:
+                if button in ("x1", "x2"):
+                    # pynput / Xlib do not expose X-buttons portably; no-op.
+                    return
                 if x is not None and y is not None:
                     _move_mouse(x, y)
                     _move_mouse(x + 2, y + 2)
@@ -4056,14 +4341,16 @@ class Playback(tk.Tk):
                         if i < click_count - 1:
                             time.sleep(0.03)
         elif backend == "event":
-            if x is not None and y is not None:
-                mouse_controller.position = (x, y)
             button_map = {
                 "left": mouse.Button.left,
                 "right": mouse.Button.right,
                 "middle": mouse.Button.middle,
             }
-            mouse_button = button_map.get(button, mouse.Button.left)
+            mouse_button = button_map.get(button)
+            if mouse_button is None:
+                return   # x1/x2 not supported via pynput
+            if x is not None and y is not None:
+                mouse_controller.position = (x, y)
             if action == "down":
                 mouse_controller.press(mouse_button)
             elif action == "up":
@@ -4074,15 +4361,23 @@ class Playback(tk.Tk):
                     if i < click_count - 1:
                         time.sleep(0.03)
         elif backend == "play":
+            button_map = {
+                "left": "left",
+                "right": "right",
+                "middle": "middle",
+            }
+            mouse_button = button_map.get(button)
+            if mouse_button is None:
+                return   # x1/x2 not supported via pyautogui in this path
             if x is not None and y is not None:
                 pyautogui.moveTo(x, y)
             if action == "down":
-                pyautogui.mouseDown(button=button)
+                pyautogui.mouseDown(button=mouse_button)
             elif action == "up":
-                pyautogui.mouseUp(button=button)
+                pyautogui.mouseUp(button=mouse_button)
             else:
                 for i in range(click_count):
-                    pyautogui.click(button=button)
+                    pyautogui.click(button=mouse_button)
                     if i < click_count - 1:
                         time.sleep(0.03)
     def _cmd_send(self, action):
@@ -4139,6 +4434,44 @@ class Playback(tk.Tk):
                     keys = " ".join(inner_parts[:-1])
                 else:
                     keys = inner
+            # AHK mouse tokens that Send can emit. Use the shared SEND_MOUSE_TOKENS.
+            # Actions: down / up / click / wheelup / wheeldown / wheelleft / wheelright
+            token_lower = str(keys).strip().lower()
+            if token_lower in SEND_MOUSE_TOKENS:
+                button, kind = SEND_MOUSE_TOKENS[token_lower]
+
+                # Wheel events ignore the down/up click_type — they are discrete ticks.
+                if kind.startswith("wheel"):
+                    direction = kind[len("wheel"):]  # up / down / left / right
+                    self._click_at(None, None, backend, button=None,
+                                action=f"wheel{direction}", click_count=1)
+                else:
+                    # Honor an explicit {X down} / {X up} wrapper.
+                    if click_type == 1:
+                        action = "down"
+                    elif click_type == 2:
+                        action = "up"
+                    else:
+                        action = "click"
+
+                    # Update our own tracked state so GetKeyState sees the change.
+                    if button in ("left", "right", "middle"):
+                        if action == "down":
+                            self._mouse_buttons_down.add(button)
+                        elif action == "up":
+                            self._mouse_buttons_down.discard(button)
+                        elif action == "click":
+                            self._mouse_buttons_down.add(button)
+                            try:
+                                self._click_at(None, None, backend, button=button,
+                                            action="click", click_count=1)
+                            finally:
+                                self._mouse_buttons_down.discard(button)
+                            return
+
+                    self._click_at(None, None, backend, button=button, action=action)
+                return
+
             self._send_key(keys, backend, self.key_delay, click_type)
         except Exception as e:
             error = traceback.format_exc()
@@ -4224,8 +4557,10 @@ class Playback(tk.Tk):
         try:
             _, value = action.split(",", 1)
             value = self.handle_variable(value)
-            ms = float(value.strip())   # float() accepts "400.0" and "400"
-            time.sleep((ms / 1000))
+            ms = int(float(value.strip()))
+            sleep_time = float(ms / 1000)
+            print(f"{action}\nValue: {value}\nms: {ms}, sleep time: {sleep_time}")
+            time.sleep(sleep_time)
             return 0
 
         except Exception as e:
@@ -4251,6 +4586,16 @@ class Playback(tk.Tk):
 
         except Exception as e:
             return e
+
+    def _warn_once(self, tag, message):
+        """Print a diagnostic message at most once per tag."""
+        if tag in self._warned_keys:
+            return
+        self._warned_keys.add(tag)
+        try:
+            print(f"[GetKeyState] {message}")
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     if open_mode == "Main Menu":
