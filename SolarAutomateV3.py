@@ -1337,19 +1337,7 @@ class Playback(tk.Tk):
                     left, operator, right = split
                     left = self._eval_if_operand(left, line_count)
                     right = self._eval_if_operand(right, line_count)
-                    try:
-                        left = int(left)
-                        right = int(right)
-                    except Exception:
-                        left = str(left).replace('"', "")
-                        right = str(right).replace('"', "")
-                    if operator == "=":
-                        if isinstance(left, str):
-                            left = left.lower()
-                            right = str(right).lower()
-                        operator = "=="
-                    processed_condition = f"{left!r} {operator} {right!r}"
-                    result = eval(processed_condition)
+                    result = self._compare_if(left, right, operator)
                 if negate:
                     result = not result
                 skip_until = self.cmd_if(line_count, result, _script)
@@ -1430,13 +1418,15 @@ class Playback(tk.Tk):
                 # Resolve functions, %Var%, and bare identifiers.
                 variable_value = self.handle_variable(raw_value)
                 if operator == ':=':
-                    # Preserve empty strings for normal assignment.
-                    if variable_value != "":
-                        try:
-                            int(variable_value)
-                        except (TypeError, ValueError):
-                            variable_value = self.handle_math(variable_value)
-                    self.local_variables[variable_name] = variable_value
+                    if isinstance(variable_value, bool):
+                        self.local_variables[variable_name] = variable_value
+                    else:
+                        if variable_value != "":
+                            try:
+                                int(variable_value)
+                            except (TypeError, ValueError):
+                                variable_value = self.handle_math(variable_value)
+                        self.local_variables[variable_name] = variable_value
                 else:
                     # Compound assignments require an existing variable.
                     if variable_name not in self.local_variables:
@@ -1531,6 +1521,8 @@ class Playback(tk.Tk):
                 skip_until = self.cmd_if(line_count, result, _script)
                 continue
 
+            if processed_line.startswith("test"):
+                print(self.handle_variable(current_line.strip("Test, ")) if "%" in processed_line else current_line)
             if processed_line.startswith("pixelsearch"):
                 self.cmd_pixelsearch(current_line)
             if processed_line.startswith("pixelgetcolor"):
@@ -1758,10 +1750,10 @@ class Playback(tk.Tk):
                     self.gui_place_info[v] = {"x": place_x, "y": place_y, "width": w, "height": h}
             # Gui, Add, Checkbox
             if arguments[2] == "Checkbox":
-                try:
+                if v:
                     self.gui_variables[v] = tk.StringVar(value=0)
-                except:
-                    self.gui_variables["0"] = tk.StringVar(value=0)
+                else:
+                    self.gui_variables[f"_anon_checkbox_{len(self.gui_variables)}"] = tk.StringVar(value=0)
                 checkbox = ttk.Checkbutton(self.current_tab2, text=arguments[4], variable=self.gui_variables[v], onvalue="1", offvalue="0",
                                            command=lambda label=g: self.cmd_gosub(f"GoSub, {label}") if label else None, style="Dark.TCheckbutton")
                 place_x = x - current_offset_x
@@ -1806,7 +1798,7 @@ class Playback(tk.Tk):
                         self.cmd_gosub(f"GoSub, {label}")
                     combobox.bind("<<ComboboxSelected>>", _on_dropdown_selected)
         # Gui, Submit, NoHide
-        if arguments[1] == "Submit":
+        if arguments[1].lower() == "submit":
             for key, value in self.gui_variables.items():
                 self.local_variables[key] = self.gui_variables[key].get()
         # Gui, Show
@@ -2349,6 +2341,75 @@ class Playback(tk.Tk):
 
         except (TypeError, ValueError):
             return True
+
+    def _coerce_for_compare(self, value):
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return value
+        text = str(value).strip()
+        if text == "":
+            return ""
+        lowered = text.lower()
+        if lowered == "true":
+            return 1
+        if lowered == "false":
+            return 0
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            pass
+        return str(value)
+
+    def _compare_if(self, left, right, operator):
+        """AHK-style IF comparison: numeric when both sides are numeric,
+        otherwise string (case-insensitive for = / != / ==)."""
+        left = self._coerce_for_compare(left)
+        right = self._coerce_for_compare(right)
+
+        # AHK: '=' and '==' are case-insensitive string equality in v1;
+        # '!=' is inequality. When both sides are numeric, compare numerically.
+        both_numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
+        if both_numeric:
+            if operator == "=":
+                return left == right
+            if operator == "==":
+                return left == right
+            if operator == "!=":
+                return left != right
+            if operator == ">":
+                return left > right
+            if operator == "<":
+                return left < right
+            if operator == ">=":
+                return left >= right
+            if operator == "<=":
+                return left <= right
+            raise ValueError(f"Unsupported operator: {operator}")
+
+        # String comparison. AHK v1 '=' / '==' are case-insensitive.
+        ls, rs = str(left), str(right)
+        if operator in ("=", "=="):
+            return ls.lower() == rs.lower()
+        if operator == "!=":
+            return ls.lower() != rs.lower()
+        # Relational on strings: lexicographic, case-insensitive.
+        ls, rs = ls.lower(), rs.lower()
+        if operator == ">":
+            return ls > rs
+        if operator == "<":
+            return ls < rs
+        if operator == ">=":
+            return ls >= rs
+        if operator == "<=":
+            return ls <= rs
+        raise ValueError(f"Unsupported operator: {operator}")
 
     def cmd_if(self, start_line, condition, script=None):
         # Initialize Defaults
@@ -3020,6 +3081,13 @@ class Playback(tk.Tk):
         if expanded != raw:
             return expanded
 
+        # AHK v1 boolean literals in expressions.
+        lowered = stripped.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
             found = self._lookup_variable(stripped, None)
             return "" if found is None else str(found)
@@ -3044,6 +3112,7 @@ class Playback(tk.Tk):
         parts = [x.strip() for x in current_line.split(",")]
         command = parts[0].lower()
         next_line_processed = next_line.replace(" ", "")
+        next_cmd = (next_line_processed or "").lower()
         # IniRead, OutputVar, Filename, Section, Key, Default=ERROR
         if command == "iniread":
             if len(parts) < 5:
@@ -3122,6 +3191,10 @@ class Playback(tk.Tk):
                         break
 
             self.local_variables[output_var] = value
+            if next_cmd.startswith("iniread"):
+                pass
+            else:
+                self.load_cache = {}
             return
 
         # IniWrite, Value, Filename, Section, Key
@@ -3165,7 +3238,8 @@ class Playback(tk.Tk):
                 if os.path.exists(filename):
                     try:
                         lines = self.read_ini(filename)
-                    except Exception:
+                    except Exception as e:
+                        print(f"[IniWrite] read failed for {filename}: {e}")
                         lines = []
                 else:
                     lines = []
@@ -3207,7 +3281,6 @@ class Playback(tk.Tk):
             # Update in-memory cache so later commands see the change immediately
             self.load_cache[filename] = output
             # Defer disk write if the next command is also IniWrite (batch consecutive writes)
-            next_cmd = (next_line_processed or "").lower()
             if next_cmd.startswith("iniwrite"):
                 # print(f"[Save] Cache update: {filename}")
                 self.save_cache = output
@@ -3231,7 +3304,8 @@ class Playback(tk.Tk):
         if widget is None:
             return
 
-        value = self.handle_variable(value)
+        if "%" in value:
+            value = self.handle_variable(value)
         subcommand = subcommand.lower()
         if subcommand == "":
             # Set Text/Value (Or Image File For Picture/Image Controls)
@@ -3911,7 +3985,7 @@ class Playback(tk.Tk):
             time.sleep(self.scan_delay)
     def ahk_hex_to_python(self, bgr_str):
         # Remove '0x' or '0X' prefix and clean spaces
-        clean_str = bgr_str.lstrip("0x").lstrip("0X").strip()
+        clean_str = re.sub(r'^0[xX]', '', bgr_str.strip()).strip()
         # Extract BB, GG, RR parts
         blue = clean_str[0:2]
         green = clean_str[2:4]
@@ -4559,7 +4633,7 @@ class Playback(tk.Tk):
             value = self.handle_variable(value)
             ms = int(float(value.strip()))
             sleep_time = float(ms / 1000)
-            print(f"{action}\nValue: {value}\nms: {ms}, sleep time: {sleep_time}")
+            # print(f"{action}\nValue: {value}\nms: {ms}, sleep time: {sleep_time}")
             time.sleep(sleep_time)
             return 0
 

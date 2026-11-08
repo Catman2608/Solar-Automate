@@ -1316,19 +1316,7 @@ class Playback(tk.Tk):
                     left, operator, right = split
                     left = self._eval_if_operand(left, line_count)
                     right = self._eval_if_operand(right, line_count)
-                    try:
-                        left = int(left)
-                        right = int(right)
-                    except Exception:
-                        left = str(left).replace('"', "")
-                        right = str(right).replace('"', "")
-                    if operator == "=":
-                        if isinstance(left, str):
-                            left = left.lower()
-                            right = str(right).lower()
-                        operator = "=="
-                    processed_condition = f"{left!r} {operator} {right!r}"
-                    result = eval(processed_condition)
+                    result = self._compare_if(left, right, operator)
                 skip_until = self.cmd_if(line_count, result, _script)
                 continue
 
@@ -1735,10 +1723,10 @@ class Playback(tk.Tk):
                     self.gui_place_info[v] = {"x": place_x, "y": place_y, "width": w, "height": h}
             # Gui, Add, Checkbox
             if arguments[2] == "Checkbox":
-                try:
+                if v:
                     self.gui_variables[v] = tk.StringVar(value=0)
-                except:
-                    self.gui_variables["0"] = tk.StringVar(value=0)
+                else:
+                    self.gui_variables[f"_anon_checkbox_{len(self.gui_variables)}"] = tk.StringVar(value=0)
                 checkbox = ttk.Checkbutton(self.current_tab2, text=arguments[4], variable=self.gui_variables[v], onvalue="1", offvalue="0",
                                            command=lambda label=g: self.cmd_gosub(f"GoSub, {label}") if label else None, style="Dark.TCheckbutton")
                 place_x = x - current_offset_x
@@ -2836,6 +2824,13 @@ class Playback(tk.Tk):
         if expanded != raw:
             return expanded
 
+        # AHK v1 boolean literals in expressions.
+        lowered = stripped.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
             found = self._lookup_variable(stripped, None)
             return "" if found is None else str(found)
@@ -3770,7 +3765,7 @@ class Playback(tk.Tk):
                     pass
     def ahk_hex_to_python(self, bgr_str):
         # Remove '0x' or '0X' prefix and clean spaces
-        clean_str = bgr_str.lstrip("0x").lstrip("0X").strip()
+        clean_str = re.sub(r'^0[xX]', '', bgr_str.strip()).strip()
         # Extract BB, GG, RR parts
         blue = clean_str[0:2]
         green = clean_str[2:4]

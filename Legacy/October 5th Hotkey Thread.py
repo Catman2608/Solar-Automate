@@ -1651,10 +1651,10 @@ class Playback(tk.Tk):
                 self.gui_controls[v] = group
             # Gui, Add, Checkbox
             if arguments[2] == "Checkbox":
-                try:
+                if v:
                     self.gui_variables[v] = tk.StringVar(value=0)
-                except:
-                    self.gui_variables["0"] = tk.StringVar(value=0)
+                else:
+                    self.gui_variables[f"_anon_checkbox_{len(self.gui_variables)}"] = tk.StringVar(value=0)
                 checkbox = ttk.Checkbutton(self.current_tab2, text=arguments[4], variable=self.gui_variables[v], onvalue="1", offvalue="0",
                                            command=lambda label=g: self.cmd_gosub(f"GoSub, {label}") if label else None, style="Dark.TCheckbutton")
                 checkbox.place(x=(x - current_offset_x), y=(y - current_offset_y))
@@ -2690,6 +2690,13 @@ class Playback(tk.Tk):
         expanded = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", repl_percent, raw)
         if expanded != raw:
             return expanded
+
+        # AHK v1 boolean literals in expressions.
+        lowered = stripped.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
 
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
             found = self._lookup_variable(stripped, None)

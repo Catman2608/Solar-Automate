@@ -2349,6 +2349,13 @@ class Playback(tk.Tk):
         if expanded != raw:
             return expanded
 
+        # AHK v1 boolean literals in expressions.
+        lowered = stripped.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
             found = self._lookup_variable(stripped, None)
             return "" if found is None else str(found)
