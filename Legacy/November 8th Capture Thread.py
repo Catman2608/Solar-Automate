@@ -44,10 +44,10 @@ keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
 APP_VERSION = 3.0
 BETA_VERSION = 0
-try:
-    playback_path = sys.argv[1]
+if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
+    playback_path = os.path.abspath(sys.argv[1])
     open_mode = "Playback"
-except:
+else:
     open_mode = "Main Menu"
     folder_path = os.getcwd()
 playback_path = "Solar Fishing Lite.ahk"
