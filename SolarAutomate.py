@@ -25,11 +25,10 @@ from pynput import keyboard, mouse
 from pynput.keyboard import Controller as KeyboardController
 from pynput.mouse import Controller as MouseController
 from pynput.mouse import Button
-# File management
 import numpy as np
+import ctypes
 if sys.platform == "win32":
     import pygetwindow as gw
-    import ctypes
     from ctypes import wintypes
 elif sys.platform == "darwin":
     import Quartz
@@ -49,7 +48,9 @@ if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
     open_mode = "Playback"
 else:
     open_mode = "Main Menu"
-    folder_path = os.getcwd()
+    playback_path = os.getcwd()
+open_mode = "Playback"
+playback_path = "Solar Fishing Lite.ahk"
 # Other functions and classes
 def open_link(url):
     webbrowser.open(url)
@@ -79,7 +80,7 @@ def get_base_path():
 BASE_PATH, IS_COMPILED = get_base_path()
 IMAGES_PATH = os.path.join(BASE_PATH, "images")
 RESOURCES_PATH = os.path.join(BASE_PATH, "resources")
-# All Platforms
+# Module-level Regex
 CONTROL_KEYWORDS = {
     "if", "else", "while", "loop",
     "for", "switch", "catch", "try"
@@ -95,6 +96,19 @@ SEND_MOUSE_TOKENS = {
     "wheelleft": (None,     "wheelleft"),
     "wheelright":(None,     "wheelright"),
 }
+_VAR_RE = re.compile(r"%([A-Za-z_][A-Za-z0-9_]*)%")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_INT_RE = re.compile(r"-?\d+")
+_FLOAT_RE = re.compile(r"-?\d+\.\d+")
+_CALL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)")
+_FULL_CALL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$", re.DOTALL)
+_MATH_OP_RE = re.compile(
+    r"^\s*(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)"
+    r"\s*([+\-*/])\s*"
+    r"(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)\s*$"
+)
+_MATH_SAFE_RE = re.compile(r"[\d.+\-*/()]+")
+_IF_OPS = ("==", "!=", ">=", "<=", ">", "<", "=")
 # Windows (Transparency and Ctypes WinDLL)
 if sys.platform == "win32":
     windll = ctypes.windll.user32
@@ -1145,6 +1159,124 @@ class WindowSpy:
         self.window.grid_rowconfigure(0, weight=0)
         self.window.grid_rowconfigure(1, weight=1)
         self.window.grid_columnconfigure(0, weight=1)
+# AHK ToolTip - full-screen transparent click-through overlay
+class ToolTipOverlay:
+    def __init__(self, master):
+        self.master = master
+        self.window = None
+        self.labels = {}  # which (int) -> Label
+
+    def _ensure_window(self):
+        if self.window is not None:
+            return
+        self.window = tk.Toplevel(self.master)
+        self.window.overrideredirect(True)
+        sw = self.master.winfo_screenwidth()
+        sh = self.master.winfo_screenheight()
+        self.window.geometry(f"{sw}x{sh}+0+0")
+        self.window.attributes("-topmost", True)
+        # Transparent background color so only labels are visible
+        trans_color = "magenta"
+        self.window.configure(bg=trans_color)
+        try:
+            self.window.attributes("-transparentcolor", trans_color)
+        except Exception:
+            pass
+        # Click-through (Windows)
+        if sys.platform == "win32":
+            self._set_click_through(True)
+        self.window.withdraw()
+
+    def _set_click_through(self, enabled=True):
+        if sys.platform != "win32" or self.window is None:
+            return
+        try:
+            hwnd = self.window.winfo_id()
+            GWL_EXSTYLE = -20
+            WS_EX_LAYERED = 0x00080000
+            WS_EX_TRANSPARENT = 0x00000020
+            # Use Ptr versions for 64-bit safety
+            user32 = ctypes.windll.user32
+            user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+            user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+            user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+            user32.SetWindowLongPtrW.argtypes = [
+                wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t
+            ]
+            style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+            if enabled:
+                new_style = style | WS_EX_LAYERED | WS_EX_TRANSPARENT
+            else:
+                new_style = style & ~WS_EX_TRANSPARENT
+            if new_style != style:
+                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style)
+                # Apply changes
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_NOZORDER = 0x0004
+                SWP_NOACTIVATE = 0x0010
+                SWP_FRAMECHANGED = 0x0020
+                user32.SetWindowPos(
+                    hwnd, 0, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                    SWP_NOACTIVATE | SWP_FRAMECHANGED
+                )
+        except Exception as exc:
+            print(f"ToolTip click-through setup failed: {exc}")
+
+    def show(self, which, text, x, y):
+        self._ensure_window()
+        which = int(which) if which else 1
+        if which not in self.labels:
+            lbl = tk.Label(
+                self.window,
+                text=text,
+                bg="yellow",
+                fg="black",
+                relief="solid",
+                borderwidth=1,
+                padx=4,
+                pady=2,
+                font=("Segoe UI", 9)
+            )
+            self.labels[which] = lbl
+        else:
+            self.labels[which].config(text=text)
+        # Place relative to the full-screen window (origin at 0,0)
+        try:
+            px = int(x) if x is not None else 0
+            py = int(y) if y is not None else 0
+        except (TypeError, ValueError):
+            px, py = 0, 0
+        self.labels[which].place(x=px, y=py)
+        self.window.deiconify()
+        self.window.lift()
+
+    def hide(self, which=None):
+        if self.window is None:
+            return
+        if which is None:
+            # Hide all
+            for lbl in self.labels.values():
+                lbl.place_forget()
+            self.window.withdraw()
+        else:
+            which = int(which)
+            if which in self.labels:
+                self.labels[which].place_forget()
+            # Withdraw if nothing visible
+            if not any(lbl.winfo_ismapped() for lbl in self.labels.values()):
+                self.window.withdraw()
+
+    def destroy(self):
+        if self.window is not None:
+            try:
+                self.window.destroy()
+            except Exception:
+                pass
+            self.window = None
+            self.labels.clear()
+
 # AHK playback
 class Playback(tk.Tk):
     def __init__(self, playback_path):
@@ -1161,9 +1293,25 @@ class Playback(tk.Tk):
             pass
 
         # 2. File Loading & Script Parsing
-        with open(playback_path, "r", encoding="utf-8-sig") as f:
-            self.script_text = f.read()
-        self.script = self.script_text.splitlines()
+        if IS_COMPILED == True:
+            def open_document_handler(*args):
+                # args is a tuple of str paths -> convert to list
+                file_paths = list(args)
+
+                # Only handle the first file (most common case), or loop if you
+                # really want to process every dropped file:
+                if file_paths:
+                    playback_path = file_paths[0]
+
+                    with open(playback_path, "r", encoding="utf-8-sig") as f:
+                        self.script_text = f.read()
+                    self.script = self.script_text.splitlines()
+
+            self.createcommand("::tk::mac::OpenDocument", open_document_handler)
+        else:
+            with open(playback_path, "r", encoding="utf-8-sig") as f:
+                self.script_text = f.read()
+            self.script = self.script_text.splitlines()
         # 3. GUI State & Constants
         self.tabs = []
         self.tab_frames = []
@@ -1198,6 +1346,8 @@ class Playback(tk.Tk):
         self.load_cache = {}
         self.save_cache = []
         self.cached_file = ""
+        # ToolTip overlay (full-screen transparent click-through)
+        self.tooltip_overlay = ToolTipOverlay(self)
         # 4. Hotkey & Listener Setup
         # Unified Hotkey Registry: Normalized_Key -> Label_Name (Str) Or Body Lines (List)
         # Presence in the dict means the hotkey is enabled. Hotkey, ..., off deletes the entry.
@@ -1295,49 +1445,27 @@ class Playback(tk.Tk):
                 break
 
             if skip_functions == True:
-                skip_function_condition = int(self.skip_lines_start[skip_counter]) <= line_count <= int(self.skip_lines_end[skip_counter])
-                if skip_function_condition == False and last_skip_function_condition == True:
-                    skip_counter += 1
-                if skip_function_condition:
-                    time.sleep(0.001)
-                    last_skip_function_condition = skip_function_condition
-                    continue
+                if len(self.skip_lines_start) > 0:
+                    skip_function_condition = int(self.skip_lines_start[skip_counter]) <= line_count <= int(self.skip_lines_end[skip_counter])
+                    if skip_function_condition == False and last_skip_function_condition == True:
+                        skip_counter += 1
+                    if skip_function_condition:
+                        time.sleep(0.001)
+                        last_skip_function_condition = skip_function_condition
+                        continue
             if debug == True:
                 print("Processing: ", _script[line_count])
             # Hashtag commands
             if processed_line.startswith("#"):
                 self._cmd_directives(current_line)
             # if (Condition)
-            # Keep function-call parentheses. Stripping every "(" / ")"
-            # turned InStr(a, b) into InStr a, b and skipped handle_variable.
             if_pattern = r'(?mi)^\s*if\s+(.+?)\s*$'
             is_if = re.match(if_pattern, current_line)
             if is_if:
                 condition = is_if.group(1).strip()
                 if condition.endswith("{"):
                     condition = condition[:-1].strip()
-                condition = self._unwrap_parens(condition)
-                # Unary not / ! support (AHK: if not GetKeyState(...))
-                negate = False
-                cond_l = condition.lstrip()
-                if cond_l.lower().startswith("not "):
-                    negate = True
-                    condition = cond_l[4:].lstrip()
-                elif cond_l.startswith("!"):
-                    negate = True
-                    condition = cond_l[1:].lstrip()
-                split = self._split_if_condition(condition)
-                if split is None:
-                    # Bare variable / function / literal: AHK truthy check.
-                    value = self.handle_variable(condition, line_count)
-                    result = self._if_truthy(value)
-                else:
-                    left, operator, right = split
-                    left = self._eval_if_operand(left, line_count)
-                    right = self._eval_if_operand(right, line_count)
-                    result = self._compare_if(left, right, operator)
-                if negate:
-                    result = not result
+                result = self.evaluate_condition(condition, line_count)
                 skip_until = self.cmd_if(line_count, result, _script)
                 continue
 
@@ -1486,7 +1614,7 @@ class Playback(tk.Tk):
                 if len(arguments) > 3:
                     msgbox_text = arguments[3]
                 # Handle Variable
-                msgbox_text = self.handle_string_variables(msgbox_text)
+                msgbox_text = self.handle_variable(msgbox_text)
                 # Handle Math
                 try:
                     int(float(msgbox_text))
@@ -1519,12 +1647,14 @@ class Playback(tk.Tk):
                 skip_until = self.cmd_if(line_count, result, _script)
                 continue
 
-            if processed_line.startswith("test"):
-                print(self.handle_variable(current_line.strip("Test, ")) if "%" in processed_line else current_line)
+            if processed_line.startswith("outputdebug"):
+                print(self.handle_variable(current_line.strip("OutputDebug, ")) if "%" in processed_line else current_line)
             if processed_line.startswith("pixelsearch"):
                 self.cmd_pixelsearch(current_line)
             if processed_line.startswith("pixelgetcolor"):
                 self.cmd_pixelgetcolor(current_line)
+            if processed_line.startswith("tooltip"):
+                self.cmd_tooltip(current_line)
             if processed_line.startswith("send"):
                 self._cmd_send(current_line)
             if processed_line.startswith("click"):
@@ -1853,6 +1983,9 @@ class Playback(tk.Tk):
         return args
 
     def build_builtin_functions(self):
+        def LTrim(string, trim=" "):
+            return string.lstrip(trim)
+        
         def RTrim(string, trim=" "):
             return string.rstrip(trim)
 
@@ -2058,9 +2191,201 @@ class Playback(tk.Tk):
                 )
                 return 0
 
+        def DllCall(*args):
+            if len(args) < 1:
+                raise ValueError("DllCall requires a function name")
+
+            # Non-Windows: DllCall is Windows-only for now.
+            # A Windows -> macOS/Linux translation layer is planned.
+            if sys.platform != "win32":
+                discord = "https://discord.com/invite/aMZY8yrF8r"
+                msg = (
+                    f"DllCall{args} is not yet supported on this platform.\n\n"
+                    "Solar Automate currently implements DllCall for Windows only.\n"
+                    "A Windows-to-macOS/Linux translation layer is planned for the future.\n\n"
+                    "Please submit a bug report or feature request:\n"
+                    f"• Discord: {discord}\n"
+                    "• Or open a GitHub issue (if you have the repository link)\n\n"
+                    "Include the DllCall you tried to use so we can prioritize the translation."
+                )
+                try:
+                    messagebox.showwarning("DllCall Not Supported", msg)
+                except Exception:
+                    print(msg)
+                # AHK-style failure
+                self.local_variables["ErrorLevel"] = -3
+                return 0
+
+            # Parse DLL and function name
+            function_path = str(args[0]).replace("/", "\\")
+
+            if "\\" in function_path:
+                dll_name, function_name = function_path.rsplit("\\", 1)
+            else:
+                # AHK: DllFile may be omitted for User32, Kernel32, ComCtl32, Gdi32
+                function_name = function_path
+                dll_name = "user32"  # temporary default; resolved below
+
+            if not dll_name.lower().endswith(".dll"):
+                dll_name += ".dll"
+
+            # Restrict DLL loading to approved system libraries (Windows).
+            allowed_dlls = {
+                "user32.dll",
+                "gdiplus.dll",
+                "kernel32.dll",
+                "gdi32.dll",
+                "shell32.dll",
+                "comctl32.dll",
+            }
+
+            if dll_name.lower() not in allowed_dlls:
+                # Treat as "DLL not found" the same way AHK does (ErrorLevel = -3)
+                self.local_variables["ErrorLevel"] = -3
+                return 0
+
+            # AHK argument type -> ctypes type
+            type_map = {
+                "int": ctypes.c_int,
+                "uint": ctypes.c_uint,
+                "short": ctypes.c_short,
+                "ushort": ctypes.c_ushort,
+                "char": ctypes.c_byte,
+                "uchar": ctypes.c_ubyte,
+                "int64": ctypes.c_int64,
+                "uint64": ctypes.c_uint64,
+                "ptr": ctypes.c_void_p,
+                "uptr": ctypes.c_size_t,
+                "float": ctypes.c_float,
+                "double": ctypes.c_double,
+                "str": ctypes.c_char_p,
+                "wstr": ctypes.c_wchar_p,
+                # Pointer variants (AHK "UIntP", "UInt*", etc.)
+                "intp": ctypes.POINTER(ctypes.c_int),
+                "uintp": ctypes.POINTER(ctypes.c_uint),
+                "ptrp": ctypes.POINTER(ctypes.c_void_p),
+            }
+
+            # Separate argument declarations from return type.
+            params = list(args[1:])
+            return_type = ctypes.c_int
+
+            if len(params) % 2 == 1:
+                return_name = str(params.pop()).lower()
+
+                if return_name not in type_map:
+                    # Invalid type -> AHK ErrorLevel -2
+                    self.local_variables["ErrorLevel"] = -2
+                    return 0
+
+                return_type = type_map[return_name]
+
+            if len(params) % 2 != 0:
+                self.local_variables["ErrorLevel"] = -2
+                return 0
+
+            # Load DLL (with AHK-style standard DLL search for unqualified names)
+            if not hasattr(self, "_dll_cache"):
+                self._dll_cache = {}
+
+            # If no DLL was specified, probe standard libraries
+            if "\\" not in function_path:
+                found_dll = None
+                for std in ["user32.dll", "kernel32.dll", "gdi32.dll", "comctl32.dll"]:
+                    try:
+                        if std not in self._dll_cache:
+                            self._dll_cache[std] = ctypes.WinDLL(std)
+                        dll_try = self._dll_cache[std]
+                        # Check if the function exists (also try W suffix)
+                        if hasattr(dll_try, function_name) or hasattr(dll_try, function_name + "W"):
+                            found_dll = std
+                            if hasattr(dll_try, function_name + "W") and not hasattr(dll_try, function_name):
+                                function_name = function_name + "W"
+                            break
+                    except Exception:
+                        continue
+                if found_dll:
+                    dll_name = found_dll
+                else:
+                    # Fall back to user32
+                    dll_name = "user32.dll"
+
+            # Attempt to load the DLL; AHK sets ErrorLevel = -3 on failure
+            try:
+                if dll_name.lower() not in self._dll_cache:
+                    self._dll_cache[dll_name.lower()] = ctypes.WinDLL(dll_name)
+                dll = self._dll_cache[dll_name.lower()]
+            except Exception:
+                self.local_variables["ErrorLevel"] = -3
+                return 0
+
+            # Resolve exported function; AHK sets ErrorLevel = -4 if not found
+            try:
+                function = getattr(dll, function_name)
+            except AttributeError:
+                # Try W suffix one more time
+                try:
+                    function = getattr(dll, function_name + "W")
+                except AttributeError:
+                    self.local_variables["ErrorLevel"] = -4
+                    return 0
+
+            # Parse arguments
+            argtypes = []
+            values = []
+
+            for i in range(0, len(params), 2):
+                type_name = str(params[i]).lower()
+                value = params[i + 1]
+
+                # Normalize pointer suffixes
+                is_ptr = False
+                if type_name.endswith("p") or type_name.endswith("*"):
+                    is_ptr = True
+                    base = type_name.rstrip("p*").lower()
+                    if base in type_map:
+                        type_name = base + "p" if base + "p" in type_map else "ptr"
+
+                if type_name not in type_map:
+                    self.local_variables["ErrorLevel"] = -2
+                    return 0
+
+                ctype = type_map[type_name]
+                argtypes.append(ctype)
+
+                if type_name == "str" and isinstance(value, str):
+                    value = value.encode("mbcs")
+
+                # For pointer types, allocate a local buffer so the call doesn't crash
+                # (output values are not written back to AHK variables in this implementation)
+                if is_ptr and isinstance(value, (int, float)):
+                    if type_name.startswith("uint"):
+                        local = ctypes.c_uint(int(value))
+                        values.append(ctypes.pointer(local))
+                    elif type_name.startswith("int"):
+                        local = ctypes.c_int(int(value))
+                        values.append(ctypes.pointer(local))
+                    else:
+                        values.append(ctypes.c_void_p(int(value) if value else 0))
+                else:
+                    values.append(value)
+
+            # Configure and invoke
+            try:
+                function.argtypes = argtypes
+                function.restype = return_type
+                result = function(*values)
+                self.local_variables["ErrorLevel"] = 0
+                return result
+            except Exception:
+                # Fatal exception during call (AHK would set a positive ErrorLevel)
+                self.local_variables["ErrorLevel"] = 1
+                return 0
+
         self.builtin_functions = {
             "A_TickCount": int(time.monotonic() * 1000),
             # Basic Functions
+            "LTrim": LTrim,
             "RTrim": RTrim,
             "InStr": InStr,
             "SubStr": SubStr,
@@ -2082,6 +2407,8 @@ class Playback(tk.Tk):
             # Window Management
             "WinExist": WinExist,
             "GetKeyState": GetKeyState,
+            # DllCall
+            "DllCall": DllCall,
         }
     def find_labels(self, script=None):
         # Initialize Defaults
@@ -2215,12 +2542,61 @@ class Playback(tk.Tk):
                     self.functions_end[function_name] = f"{function_scan_line}"
                     break
 
-    def _unwrap_parens(self, value):
+    def evaluate_condition(self, text, line=0):
         """
-        Strip wrapping (...) pairs that enclose the whole string.
-        Inner parentheses belonging to function calls are left alone.
+        Evaluate an AHK v1 IF condition and return a bool.
+
+        Grammar (matches AHK v1 `if`):
+            cond    := "not" cond | "!" cond | "(" cond ")" | comparison | truthy
+            comparison := operand OP operand
+            operand := quoted-string (with %Var%) | Func(...) | variable | literal
+
+        OP is one of == != >= <= > < =, found outside quotes and function parens.
+        AHK v1 semantics:
+        - '=' and '==' are case-insensitive string equality in v1
+        - '!=' is case-insensitive inequality
+        - relational ops are numeric when both sides are numeric, else
+            lexicographic and case-insensitive
+        - truthiness: "" and 0 are false, everything else true
         """
-        s = "" if value is None else str(value).strip()
+        s = "" if text is None else str(text).strip()
+
+        negate = False
+        while True:
+            before = s
+            while True:
+                if s.lower().startswith("not "):
+                    negate = not negate
+                    s = s[4:].lstrip()
+                    continue
+                if s.startswith("!"):
+                    negate = not negate
+                    s = s[1:].lstrip()
+                    continue
+                break
+            s = self._if_strip_parens(s)
+            if s == before:
+                break
+
+        # ---- 3. Try comparison ----
+        split = self._if_split_comparison(s)
+        if split is not None:
+            left_raw, op, right_raw = split
+            left = self._if_resolve_operand(left_raw, line)
+            right = self._if_resolve_operand(right_raw, line)
+            result = self._if_compare(left, right, op)
+        else:
+            # ---- 4. Bare value -> AHK truthiness ----
+            value = self.handle_variable(s, line)
+            result = self._if_truthy(value)
+
+        return (not result) if negate else result
+
+
+    # ---- internal helpers used only by evaluate_condition ---------------------
+
+    def _if_strip_parens(self, s):
+        """Strip wrapping ( ... ) pairs that enclose the whole string."""
         while len(s) >= 2 and s.startswith("(") and s.endswith(")"):
             depth = 0
             quote = None
@@ -2230,11 +2606,9 @@ class Playback(tk.Tk):
                     if ch == quote:
                         quote = None
                     continue
-
                 if ch in "\"'":
                     quote = ch
                     continue
-
                 if ch == "(":
                     depth += 1
                 elif ch == ")":
@@ -2242,24 +2616,20 @@ class Playback(tk.Tk):
                     if depth == 0 and i != len(s) - 1:
                         wraps = False
                         break
-
                     if depth < 0:
                         wraps = False
                         break
-
             if not wraps or depth != 0:
                 break
-
             s = s[1:-1].strip()
         return s
 
-    def _split_if_condition(self, condition):
+
+    def _if_split_comparison(self, s):
         """
-        Split an IF condition on the comparison operator that sits
-        outside quotes and function-call parentheses.
+        Find the first comparison operator at depth 0 (outside quotes and
+        function-call parentheses). Returns (left, op, right) or None.
         """
-        s = "" if condition is None else str(condition)
-        ops = ("==", "!=", ">=", "<=", ">", "<", "=")
         depth = 0
         quote = None
         i = 0
@@ -2270,77 +2640,64 @@ class Playback(tk.Tk):
                     quote = None
                 i += 1
                 continue
-
             if ch in "\"'":
                 quote = ch
                 i += 1
                 continue
-
             if ch == "(":
                 depth += 1
                 i += 1
                 continue
-
             if ch == ")":
                 depth -= 1
                 i += 1
                 continue
-
             if depth == 0:
-                for op in ops:
+                for op in _IF_OPS:  # ordered longest-first so "==" beats "="
                     if s.startswith(op, i):
                         left = s[:i].strip()
                         right = s[i + len(op):].strip()
                         if left != "" and right != "":
                             return left, op, right
-
                         break
-
             i += 1
         return None
 
-    def _eval_if_operand(self, token, line=0):
+
+    def _if_resolve_operand(self, token, line=0):
         """
-        Resolve one side of an IF comparison the same way := does:
-        quoted literals stay literal (except %Var% inside), function
-        calls and identifiers go through handle_variable.
+        Resolve one side of a comparison the same way := does.
+        Quoted literals stay literal (only %Var% inside expands);
+        everything else goes through handle_variable.
         """
         raw = "" if token is None else str(token).strip()
         if raw == "":
             return ""
-
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
             inner = raw[1:-1]
-            if "%" in inner:
-                return re.sub( r"%([A-Za-z_][A-Za-z0-9_]*)%", lambda m: ("" if self._lookup_variable(m.group(1), None) is None else str(self._lookup_variable(m.group(1), ""))),
-                    inner,
-                )
-            return inner
-
+            return _VAR_RE.sub(lambda m: self._var_string(m.group(1)), inner)
         return self.handle_variable(raw, line)
 
+
     def _if_truthy(self, value):
-        """AHK v1: blank and 0 are false; anything else is true."""
+        """AHK v1: blank and 0 are false; everything else true."""
         if value is None or value is False:
             return False
-
         if value is True:
             return True
-
         if isinstance(value, (int, float)):
             return value != 0
-
         text = str(value).strip()
         if text == "" or text == "0":
             return False
-
         try:
             return float(text) != 0
-
         except (TypeError, ValueError):
             return True
 
-    def _coerce_for_compare(self, value):
+
+    def _if_coerce(self, value):
+        """Normalize for comparison: booleans -> 0/1, numeric strings -> numbers."""
         if value is None:
             return ""
         if isinstance(value, bool):
@@ -2363,21 +2720,16 @@ class Playback(tk.Tk):
             return float(text)
         except (TypeError, ValueError):
             pass
-        return str(value)
+        return text
 
-    def _compare_if(self, left, right, operator):
-        """AHK-style IF comparison: numeric when both sides are numeric,
-        otherwise string (case-insensitive for = / != / ==)."""
-        left = self._coerce_for_compare(left)
-        right = self._coerce_for_compare(right)
 
-        # AHK: '=' and '==' are case-insensitive string equality in v1;
-        # '!=' is inequality. When both sides are numeric, compare numerically.
-        both_numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
-        if both_numeric:
-            if operator == "=":
-                return left == right
-            if operator == "==":
+    def _if_compare(self, left, right, operator):
+        """AHK v1: numeric when both sides are numeric, else case-insensitive string."""
+        left = self._if_coerce(left)
+        right = self._if_coerce(right)
+
+        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            if operator in ("=", "=="):
                 return left == right
             if operator == "!=":
                 return left != right
@@ -2391,14 +2743,11 @@ class Playback(tk.Tk):
                 return left <= right
             raise ValueError(f"Unsupported operator: {operator}")
 
-        # String comparison. AHK v1 '=' / '==' are case-insensitive.
-        ls, rs = str(left), str(right)
+        ls, rs = str(left).lower(), str(right).lower()
         if operator in ("=", "=="):
-            return ls.lower() == rs.lower()
+            return ls == rs
         if operator == "!=":
-            return ls.lower() != rs.lower()
-        # Relational on strings: lexicographic, case-insensitive.
-        ls, rs = ls.lower(), rs.lower()
+            return ls != rs
         if operator == ">":
             return ls > rs
         if operator == "<":
@@ -2711,172 +3060,113 @@ class Playback(tk.Tk):
         except KeyError as e:
             return e
 
-    def _ahk_float(self, token):
-        """
-        Coerce one math operand to float.
-        Unset / blank / non-numeric values become 0 (AHK v1 expression behaviour).
-        """
-        token = "" if token is None else str(token).strip()
-        try:
-            return float(token)
+    def _has_unquoted_math_operator(self, expr):
+        return bool(re.search(r"(?<![\"'])[+\-*/](?![\"'])", str(expr or "")))
 
-        except (TypeError, ValueError):
-            pass
+    def handle_math(self, value, mode="auto"):
+        """
+        Unified math evaluator. `mode` selects behavior:
 
-        resolved = self.handle_variable(token)
-        if resolved is None or resolved == "":
+        "auto"     -> try single-op fast path, then expression eval (old handle_math)
+        "number"   -> coerce to a number; unset/blank -> 0 (old _ahk_float / _to_number)
+        "int"      -> same as "number" but return int (old _to_number(as_int=True))
+        "expr"     -> full expression eval only (old _eval_math)
+
+        Returns a float/int on success, or the original value unchanged if the
+        expression is not safely evaluable (matches old handle_math behavior).
+        """
+        raw = "" if value is None else str(value).strip()
+
+        if mode == "number":
+            return self._to_number(raw, as_int=False)
+        if mode == "int":
+            return self._to_number(raw, as_int=True)
+        if mode == "expr":
+            return self._eval_math_expr(raw)
+
+        # mode == "auto"
+        if raw == "":
             return 0.0
 
-        try:
-            return float(resolved)
+        m = _MATH_OP_RE.match(raw)
+        if m:
+            left = self._to_number(m.group(1))
+            right = self._to_number(m.group(3))
+            op = m.group(2)
+            if op == "+":
+                return left + right
+            if op == "-":
+                return left - right
+            if op == "*":
+                return left * right
+            if op == "/":
+                return left / right
 
-        except (TypeError, ValueError):
-            math_result = self.handle_math(resolved)
-            try:
-                return float(math_result)
+        return self._eval_math_expr(raw)
 
-            except (TypeError, ValueError):
-                return 0.0
 
-    def _resolve_number(self, token, as_int=False):
-        """
-        Resolve a command argument to a number.
-        Accepts literals, %Var%, bare identifiers, and simple math.
-        Unset / blank / non-numeric values become 0 (AHK v1).
-        """
+    def _to_number(self, token, as_int=False):
+        """Coerce one operand to float/int. Unset/blank/non-numeric -> 0."""
         raw = "" if token is None else str(token).strip()
         if raw == "":
             return 0 if as_int else 0.0
 
-        num = self._ahk_float(raw)
-        return int(num) if as_int else num
+        # Direct literal.
+        try:
+            n = float(raw)
+            return int(n) if as_int else n
+        except (TypeError, ValueError):
+            pass
 
-    def _expand_percents(self, value):
-        """Replace %Name% with the variable value (missing -> "")."""
-        raw = "" if value is None else str(value)
-        def repl(match):
-            found = self._lookup_variable(match.group(1), None)
-            return "" if found is None else str(found)
+        # Variable or %Var%.
+        resolved = self.handle_variable(raw)
+        if resolved is None or resolved == "":
+            return 0 if as_int else 0.0
+        try:
+            n = float(resolved)
+            return int(n) if as_int else n
+        except (TypeError, ValueError):
+            pass
 
-        return re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", repl, raw)
+        # Last resort: expression eval.
+        result = self._eval_math_expr(str(resolved))
+        try:
+            n = float(result)
+            return int(n) if as_int else n
+        except (TypeError, ValueError):
+            return 0 if as_int else 0.0
 
-    def handle_string_variables(self, value):
-        """Expand percent variables and known bare variables within a string."""
-        raw = "" if value is None else str(value)
-        if "A_TickCount" in raw:
-            self.builtin_variables["A_TickCount"] = int(time.perf_counter() * 1000)
-        pattern = r"%([A-Za-z_][A-Za-z0-9_]*)%|\b([A-Za-z_][A-Za-z0-9_]*)\b"
-        def replace(match):
-            name = match.group(1) or match.group(2)
-            found = self._lookup_variable(name, None)
-            if found is None:
-                return match.group(0)
 
-            return str(found)
-
-        return re.sub(pattern, replace, raw)
-
-    def _eval_math(self, value):
+    def _eval_math_expr(self, expr):
         """
-        Evaluate a more complex math expression.
-        Known script variables are substituted first so
-        (WindowHeight/2)-(20*9) and a + b + c work.
-        Unset identifiers become 0 (AHK v1 expression math).
+        Evaluate a math expression after substituting known variables.
+        Unset identifiers become 0 (AHK v1 expression semantics).
+        Returns the original expression unchanged if it is not safely evaluable.
         """
-        expr = str(value)
-        def replace_percent(match):
-            name = match.group(1)
-            return str(self._ahk_float(self._lookup_variable(name, "")))
+        original = "" if expr is None else str(expr)
+        expr = original
 
-        expr = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", replace_percent, expr)
-        def replace_ident(match):
-            name = match.group(0)
-            found = self._lookup_variable(name, None)
-            if found is not None:
-                return str(self._ahk_float(found))
-
-            # AHK v1: unset/blank operands are 0 in expressions.
-            return "0"
-
-        expr = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", replace_ident, expr)
+        # Expand %Var% to numeric values.
+        expr = _VAR_RE.sub(
+            lambda m: str(self._to_number(m.group(1))), expr
+        )
+        # Replace bare identifiers: known var -> its numeric value, else 0.
+        def repl_ident(m):
+            found = self.local_variables.get(
+                m.group(0), self.builtin_variables.get(m.group(0))
+            )
+            return str(self._to_number(found)) if found is not None else "0"
+        expr = _IDENT_RE.sub(repl_ident, expr)
         expr = expr.replace(" ", "")
-        # Reject call-like forms (digit or ) immediately followed by ()
-        # that would produce SyntaxWarning: 'int' object is not callable
-        if not re.fullmatch(r"[\d.+\-*/()]+", expr or "") or re.search(r"[\d)]\(", expr):
-            return value
+
+        # Safety: only digits, operators, parentheses; no call-like "x(".
+        if not _MATH_SAFE_RE.fullmatch(expr) or re.search(r"[\d)]\(", expr):
+            return original  # return original unchanged (not the substituted form)
 
         try:
             return eval(expr, {"__builtins__": {}}, {})
-
         except Exception:
-            return value
-
-    def _has_unquoted_math_operator(self, expr):
-        """True if expr contains an unquoted + - * or / (AHK expression math)."""
-        s = "" if expr is None else str(expr)
-        in_quote = None
-        i = 0
-        while i < len(s):
-            ch = s[i]
-            if in_quote:
-                if ch == in_quote:
-                    in_quote = None
-                elif ch == "`" and i + 1 < len(s):
-                    i += 1  # skip AHK escape
-                i += 1
-                continue
-
-            if ch in "\"'":
-                in_quote = ch
-                i += 1
-                continue
-
-            if ch in "+-*/":
-                return True
-
-            i += 1
-        return False
-
-    def handle_math(self, value):
-        raw = "" if value is None else str(value).strip()
-        if raw == "":
-            return 0.0
-
-        # One operator only: left +|-|*|/ right
-        # Operands may be numbers, identifiers, or %Var% (including a leading minus).
-        math_pattern = (r"^\s*" r"(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)" r"\s*([+\-*/])\s*" r"(%?[A-Za-z_][A-Za-z0-9_]*%?|-?\d+(?:\.\d+)?)" r"\s*$")
-        match = re.match(math_pattern, raw)
-        if match:
-            try:
-                left = self._ahk_float(match.group(1))
-                operator = match.group(2)
-                right = self._ahk_float(match.group(3))
-                if operator == "+":
-                    return left + right
-
-                if operator == "-":
-                    return left - right
-
-                if operator == "*":
-                    return left * right
-
-                if operator == "/":
-                    return left / right
-
-            except Exception:
-                print(traceback.format_exc())
-
-        # No single operator, conversion/op failed, or a chained equation (a + b + c).
-        return self._eval_math(raw)
-
-    def _lookup_variable(self, name, default=None):
-        if name in self.local_variables:
-            return self.local_variables[name]
-
-        if name in self.builtin_variables:
-            return self.builtin_variables[name]
-
-        return default
+            return original
 
     def handle_concat(self, value):
         """
@@ -2916,14 +3206,14 @@ class Playback(tk.Tk):
 
             pct = re.match(r"%([A-Za-z_][A-Za-z0-9_]*)%", s[i:])
             if pct:
-                found = self._lookup_variable(pct.group(1), None)
+                found = self.local_variables.get(pct.group(1), self.builtin_variables.get(pct.group(1), None))
                 parts.append("" if found is None else str(found))
                 i += pct.end()
                 continue
 
             ident = re.match(r"[A-Za-z_][A-Za-z0-9_]*", s[i:])
             if ident:
-                found = self._lookup_variable(ident.group(0), None)
+                found = self.local_variables.get(ident.group(0), self.builtin_variables.get(ident.group(0), None))
                 parts.append("" if found is None else str(found))
                 i += ident.end()
                 continue
@@ -2938,162 +3228,205 @@ class Playback(tk.Tk):
             i += 1
         return "".join(parts)
 
-    def _lookup_builtin_function(self, name):
-        if name in self.builtin_functions:
-            found = self.builtin_functions[name]
-            return found if callable(found) else None
-
-        lower = str(name).lower()
-        for key, fn in self.builtin_functions.items():
-            if key.lower() == lower and callable(fn):
-                return fn
-
-        return None
-
-    def _lookup_user_function(self, name):
-        if name in self.functions_start and name in self.functions_end:
-            return name
-
-        lower = str(name).lower()
-        for key in self.functions_start:
-            if key.lower() == lower and key in self.functions_end:
-                return key
-
-        return None
-
-    def _resolve_embedded_calls(self, expr, line=0):
-        """Replace any Func(args) substrings inside expr with their evaluated results."""
-        # Match a function call anywhere in the string (not anchored to start/end)
-        pattern = r'([A-Za-z_][A-Za-z0-9_]*)\s*\(([^()]*)\)'
-        # Repeat until no more matches (handles nesting inside-out)
-        while True:
-            match = re.search(pattern, expr)
-            if not match:
-                break
-
-            full = match.group(0)
-            fname = match.group(1)
-            params = match.group(2)
-            user_name = self._lookup_user_function(fname)
-            builtin = self._lookup_builtin_function(fname)
-            if user_name is None and builtin is None:
-                # Not a known function — leave it alone to avoid infinite loop
-                break
-
-            # Recursively evaluate the arguments first
-            args = self.split_args(params)
-            for i in range(len(args)):
-                arg = args[i].strip()
-                if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
-                    inner = arg[1:-1]
-                    args[i] = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", lambda m: ("" if self._lookup_variable(m.group(1), None) is None else str(self._lookup_variable(m.group(1), ""))),
-                        inner,
-                    )
-                else:
-                    resolved = self.handle_variable(arg, line, True)
-                    if isinstance(resolved, str):
-                        if re.fullmatch(r"-?\d+", resolved.strip()):
-                            resolved = int(resolved.strip())
-                        elif re.fullmatch(r"-?\d+\.\d+", resolved.strip()):
-                            resolved = float(resolved.strip())
-                        else:
-                            math_result = self.handle_math(resolved)
-                            if math_result != resolved:
-                                resolved = math_result
-                    args[i] = resolved
-            if user_name is not None:
-                start_line2 = self.functions_start[user_name]
-                end_line2 = self.functions_end[user_name]
-                self.execute_script(start_line2, end_line2)
-                if self.flow == "return":
-                    self.flow = None
-                # A user function call inside an expression — hard to substitute
-                # a value here; bail out and let the caller handle it.
-                break
-
-            result = builtin(*args)
-            expr = expr[:match.start()] + str(result) + expr[match.end():]
-        return expr
-
     def handle_variable(self, value, line=0, scan_functions=True):
-        # %Name% inside a larger string is expanded. A bare identifier
-        # that is a known variable is resolved. Missing vars -> "".
-        # Literals and expressions (1, 1 + 1, paths, quotes) pass through.
-        # When the whole value is Func(args), evaluate the call (nested
-        # calls and %Var% inside arguments included).
+        """
+        Single entry point for variable/string resolution.
+
+        Modes (inferred from `value`):
+        - Full function call "Func(args)"        -> handle_function (returns raw)
+        - Pure "%Var%" or "%Var%..." string      -> expand, return string
+        - Whole-token identifier "Name"          -> lookup; "" if missing
+        - Whole-token literal "42" / "3.14"      -> int/float
+        - Quoted string "\"abc\""                -> inner text (with %Var% expanded)
+        - Literals "true"/"false"                -> bool
+        - Anything else                          -> returned unchanged
+
+        `scan_functions=False` skips the leading full-call check (used internally
+        when the caller already knows `value` is not a bare call).
+        """
         if value is None:
             return ""
-
         raw = str(value)
-        stripped = raw.strip()
-        # Update some variables if needed
-        if "A_TickCount" in value:
+
+        # Keep A_TickCount fresh (pre-existing behavior).
+        if "A_TickCount" in raw:
             self.builtin_variables["A_TickCount"] = int(time.perf_counter() * 1000)
+
+        stripped = raw.strip()
+
+        # 1. Whole value is a function call -> evaluate it (result kept as-is).
         if scan_functions:
-            function_pattern = r'(?mi)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*$'
-            is_function_call = re.match(function_pattern, stripped)
-            if is_function_call:
-                function_name = is_function_call.group(1)
-                parameters = is_function_call.group(2)
-                user_name = self._lookup_user_function(function_name)
-                if user_name is not None:
-                    start_line2 = self.functions_start[user_name]
-                    end_line2 = self.functions_end[user_name]
-                    self.execute_script(start_line2, end_line2)
+            m = _FULL_CALL_RE.match(stripped)
+            if m:
+                fn, kind = self._lookup_function(m.group(1))
+                if fn is not None:
+                    if kind == "builtin":
+                        return self.handle_function(fn, m.group(2), line=line)
+                    start = self.functions_start[fn]
+                    end = self.functions_end[fn]
+                    self.execute_script(start, end)
                     if self.flow == "return":
                         self.flow = None
                     return raw
 
-                builtin = self._lookup_builtin_function(function_name)
-                if builtin is not None:
-                    args = self.split_args(parameters)
-                    for i in range(len(args)):
-                        arg = args[i].strip()
-                        if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
-                            # Quoted args stay literal except %Var%.
-                            inner = arg[1:-1]
-                            args[i] = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", lambda m: ("" if self._lookup_variable(m.group(1), None) is None else str(self._lookup_variable(m.group(1), ""))),
-                                inner,
-                            )
-                        else:
-                            # Resolve any nested function calls inside the expression first
-                            resolved = self._resolve_embedded_calls(arg, line)
-                            resolved = self.handle_variable(resolved, line, True)
-                            if isinstance(resolved, str):
-                                if re.fullmatch(r"-?\d+", resolved.strip()):
-                                    resolved = int(resolved.strip())
-                                elif re.fullmatch(r"-?\d+\.\d+", resolved.strip()):
-                                    resolved = float(resolved.strip())
-                                else:
-                                    math_result = self.handle_math(resolved)
-                                    if math_result != resolved:
-                                        resolved = math_result
-                            args[i] = resolved
-                    return builtin(*args)
+        # 2. Pure "%Var%" -> single lookup (fast path, avoids regex overhead).
+        if _VAR_RE.fullmatch(stripped):
+            return self._var_string(_VAR_RE.fullmatch(stripped).group(1))
 
-        def repl_percent(match):
-            found = self._lookup_variable(match.group(1), None)
-            return "" if found is None else str(found)
+        # 3. Percent expansion anywhere in the string (the old _expand_percents /
+        #    handle_string_variables behavior).
+        if "%" in raw:
+            return _VAR_RE.sub(
+                lambda m: self._var_string(m.group(1)), raw
+            )
 
-        expanded = re.sub(r"%([A-Za-z_][A-Za-z0-9_]*)%", repl_percent, raw)
-        if expanded != raw:
-            return expanded
-
-        # AHK v1 boolean literals in expressions.
+        # 4. Boolean literals (AHK v1 expression form).
         lowered = stripped.lower()
         if lowered == "true":
             return True
         if lowered == "false":
             return False
 
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
-            found = self._lookup_variable(stripped, None)
-            return "" if found is None else str(found)
+        # 5. Whole-token identifier -> variable lookup.
+        if _IDENT_RE.fullmatch(stripped):
+            return self._var_string(stripped)
 
+        # 6. Quoted string -> strip quotes, expand %Var% inside.
         if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in "\"'":
-            return stripped[1:-1]
+            inner = stripped[1:-1]
+            return _VAR_RE.sub(
+                lambda m: self._var_string(m.group(1)), inner
+            )
 
+        # 7. Numeric literal -> keep as string (callers coerce when needed).
+        #    Matches the old behavior: handle_variable did not convert bare numbers.
         return raw
+
+
+    def _var_string(self, name):
+        """Internal helper: return variable value as str ("" if unset)."""
+        found = self.local_variables.get(name, self.builtin_variables.get(name))
+        return "" if found is None else str(found)
+
+    def _lookup_function(self, name):
+        """
+        Return (resolved_name_or_callable, kind) where kind is "builtin"|"user".
+        Returns (None, None) if unknown. Case-insensitive.
+        """
+        if name in self.builtin_functions and callable(self.builtin_functions[name]):
+            return self.builtin_functions[name], "builtin"
+        if name in self.functions_start and name in self.functions_end:
+            return name, "user"
+        lowered = str(name).lower()
+        for key, fn in self.builtin_functions.items():
+            if key.lower() == lowered and callable(fn):
+                return fn, "builtin"
+        for key in self.functions_start:
+            if key.lower() == lowered and key in self.functions_end:
+                return key, "user"
+        return None, None
+
+    def handle_function(self, fn_or_callable, params_or_args, line=0):
+        """
+        Two calling conventions to support both old call sites:
+
+        handle_function(func_name_str, params_str)   -> looks up + resolves args
+        handle_function(callable, args_list)         -> coerces args + calls
+        handle_function(callable, params_str)        -> resolves then calls
+
+        Built-in calls are fully evaluated and the result is returned.
+        User-function calls execute the body and return the raw expression text
+        (preserving the old behavior where return values were not captured).
+        """
+        # Always treat a string second argument as a raw params string to split.
+        if isinstance(params_or_args, str):
+            if isinstance(fn_or_callable, str):
+                name = fn_or_callable
+                found, kind = self._lookup_function(name)
+                if found is None:
+                    return None
+                if kind == "user":
+                    start = self.functions_start[found]
+                    end = self.functions_end[found]
+                    self.execute_script(start, end)
+                    if self.flow == "return":
+                        self.flow = None
+                    return f"{name}({params_or_args})"
+                args = self._resolve_call_args(params_or_args, line)
+                return found(*args)
+            # callable + params string
+            args = self._resolve_call_args(params_or_args, line)
+            return fn_or_callable(*args)
+
+        # Convention B: already-split args list
+        args = self._coerce_call_args(params_or_args, line)
+        return fn_or_callable(*args)
+
+
+    def _resolve_call_args(self, params_str, line):
+        """Split a comma-separated arg string and resolve each argument."""
+        return self._coerce_call_args(self.split_args(params_str), line)
+
+
+    def _coerce_call_args(self, args, line):
+        """Resolve each argument: quoted literals stay literal (with %Var%),
+        bare args get embedded calls resolved first, then variable lookup,
+        then numeric coercion, then math."""
+        out = []
+        for arg in args:
+            arg = "" if arg is None else str(arg).strip()
+
+            # Quoted literal: keep inner text, expand %Var% only.
+            if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in "\"'":
+                inner = arg[1:-1]
+                out.append(_VAR_RE.sub(lambda m: self._var_string(m.group(1)), inner))
+                continue
+
+            # Resolve embedded Func(...) calls anywhere inside the arg.
+            arg = self._resolve_embedded_calls(arg, line)
+            # Then normal variable/literal handling (skip the full-call branch:
+            # we just flattened it).
+            resolved = self.handle_variable(arg, line, scan_functions=False)
+
+            # Numeric coercion (previous behavior). Only try math on a
+            # non-empty string: handle_math("") returns 0.0, which would
+            # silently turn an unresolved identifier into a numeric zero.
+            if isinstance(resolved, str):
+                s = resolved.strip()
+                if s == "":
+                    pass  # keep "" — unset variable stays an empty string
+                elif _INT_RE.fullmatch(s):
+                    resolved = int(s)
+                elif _FLOAT_RE.fullmatch(s):
+                    resolved = float(s)
+                else:
+                    math_result = self.handle_math(s)
+                    if math_result != resolved:
+                        resolved = math_result
+            out.append(resolved)
+        return out
+
+
+    def _resolve_embedded_calls(self, expr, line=0):
+        """
+        Replace Func(args) substrings with their computed values.
+        Built-ins are substituted; user functions stop substitution (their return
+        value cannot be captured from here), matching the old behavior.
+        """
+        expr = "" if expr is None else str(expr)
+        while True:
+            m = _CALL_RE.search(expr)
+            if not m:
+                break
+            name, params = m.group(1), m.group(2)
+            found, kind = self._lookup_function(name)
+            if found is None:
+                break  # unknown -> leave alone, avoid infinite loop
+            if kind == "user":
+                break  # cannot substitute a user-function return value
+            args = self._resolve_call_args(params, line)
+            expr = expr[:m.start()] + str(found(*args)) + expr[m.end():]
+        return expr
 
     def read_ini(self, filename):
         for encoding in ("utf-8-sig", "utf-8", "utf-16", "cp1252"):
@@ -4119,10 +4452,10 @@ class Playback(tk.Tk):
             _, args = line.split(",", 1)
             arguments = [p.strip() for p in args.split(",")]
             # 1. Resolve coordinate arguments (literals, %Var%, bare names, simple math)
-            x1 = self._resolve_number(arguments[2], as_int=True)
-            y1 = self._resolve_number(arguments[3], as_int=True)
-            x2 = self._resolve_number(arguments[4], as_int=True)
-            y2 = self._resolve_number(arguments[5], as_int=True)
+            x1 = self._to_number(arguments[2], as_int=True)
+            y1 = self._to_number(arguments[3], as_int=True)
+            x2 = self._to_number(arguments[4], as_int=True)
+            y2 = self._to_number(arguments[5], as_int=True)
             # 2. Handle search mode properly (keeping it within 0 or 1 as pixel_search expects)
             search_mode = 0
             if x1 > x2 or y1 > y2:
@@ -4137,7 +4470,7 @@ class Playback(tk.Tk):
             img = self.capture_frame[top:bottom, left:right]
             color_raw = self.handle_variable(arguments[6]) if len(arguments) > 6 else ""
             color = self.bgr_to_hex(color_raw)
-            tolerance = self._resolve_number(arguments[7], as_int=True) if len(arguments) > 7 else 0
+            tolerance = self._to_number(arguments[7], as_int=True) if len(arguments) > 7 else 0
             x, y = self.pixel_search(img, color, tolerance, search_mode)
             # Adjust x, y back to global frame coordinates if needed,
             # depending on whether pixel_search returns local or global offsets.
@@ -4161,8 +4494,8 @@ class Playback(tk.Tk):
             self.last_capture_id = self.capture_id
             _, args = line.split(",", 1)
             arguments = [p.strip() for p in args.split(",")]
-            x = self._resolve_number(arguments[1], as_int=True)
-            y = self._resolve_number(arguments[2], as_int=True)
+            x = self._to_number(arguments[1], as_int=True)
+            y = self._to_number(arguments[2], as_int=True)
             if self.capture_frame is None:
                 self.capture_frame = self.capture_single_frame()
             b, g, r = self.pixel_get_color(self.capture_frame, x, y)
@@ -4175,6 +4508,51 @@ class Playback(tk.Tk):
         except Exception:
             print(traceback.format_exc())
             self.local_variables["ErrorLevel"] = 1
+
+    def cmd_tooltip(self, line):
+        """AHK ToolTip [, Text, X, Y, WhichToolTip]
+        Implemented as a full-screen transparent, click-through overlay.
+        """
+        try:
+            # Strip command name
+            parts = [p.strip() for p in line.split(",")]
+            text = ""
+            x = None
+            y = None
+            which = 1
+            if len(parts) > 1:
+                text = parts[1]
+            if len(parts) > 2 and parts[2]:
+                x = self._to_number(self.handle_variable(parts[2]), as_int=True)
+            if len(parts) > 3 and parts[3]:
+                y = self._to_number(self.handle_variable(parts[3]), as_int=True)
+            if len(parts) > 4 and parts[4]:
+                try:
+                    which = int(self._to_number(self.handle_variable(parts[4]), as_int=True))
+                except (TypeError, ValueError):
+                    which = 1
+            # Resolve variables / expressions in text
+            text = str(self.handle_variable(text))
+            text = text.replace("`n", "\n")
+            if not text:
+                # Empty text hides the specified (or default) tooltip
+                self.tooltip_overlay.hide(which)
+                return
+            # Default position near mouse if X/Y omitted
+            if x is None or y is None:
+                try:
+                    mx, my = mouse_controller.position
+                    if x is None:
+                        x = int(mx) + 10
+                    if y is None:
+                        y = int(my) + 10
+                except Exception:
+                    x = x or 100
+                    y = y or 100
+            self.tooltip_overlay.show(which, text, x, y)
+        except Exception:
+            print(traceback.format_exc())
+
     def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
         """
         Send a keyboard event.
@@ -4474,7 +4852,7 @@ class Playback(tk.Tk):
             cmd_lower = command.lower()
             if cmd_lower == "sendmode":
                 backend = keys.split(",", 1)[0].strip()
-                backend = self._expand_percents(backend)
+                backend = self.handle_variable(backend)
                 if backend:
                     self.send_backend = backend
                 return
@@ -4490,10 +4868,10 @@ class Playback(tk.Tk):
             # Traditional Send: expand %Var%. A whole-token known variable
             # (including a numeric one) is also resolved; a missing name such
             # as D in "Send, D" stays the literal key.
-            keys = self._expand_percents(keys)
+            keys = self.handle_variable(keys)
             stripped = keys.strip()
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stripped):
-                found = self._lookup_variable(stripped, None)
+                found = self.local_variables.get(stripped, self.builtin_variables.get(stripped, None))
                 if found is not None:
                     keys = str(found)
             click_type = 0
@@ -4592,7 +4970,7 @@ class Playback(tk.Tk):
                     continue
 
                 try:
-                    coords.append(self._resolve_number(p, as_int=True))
+                    coords.append(self._to_number(p, as_int=True))
                 except (TypeError, ValueError):
                     for word in p.split():
                         modifiers.append(word.lower())
@@ -4628,8 +5006,7 @@ class Playback(tk.Tk):
     def _cmd_sleep(self, action):
         try:
             _, value = action.split(",", 1)
-            value = self.handle_variable(value)
-            ms = int(float(value.strip()))
+            ms = self._to_number(value, as_int=True)
             sleep_time = float(ms / 1000)
             # print(f"{action}\nValue: {value}\nms: {ms}, sleep time: {sleep_time}")
             time.sleep(sleep_time)
@@ -4640,8 +5017,11 @@ class Playback(tk.Tk):
 
     def _cmd_mousemove(self, action):
         _, args = action.split(",", 1)
-        x, y = [int(v.strip()) for v in args.split(",")]
+        parts = [p.strip() for p in args.split(",")]
+        x = self._to_number(parts[0], as_int=True)
+        y = self._to_number(parts[1], as_int=True)
         mouse_controller.position = (x, y)
+        
     def _cmd_mousegetpos(self, action):
         # Ahk: Mousegetpos [, Outx, Outy]
         try:

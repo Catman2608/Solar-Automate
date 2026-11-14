@@ -44,10 +44,10 @@ keyboard_controller = KeyboardController()
 mouse_controller = MouseController()
 APP_VERSION = 3.0
 BETA_VERSION = 0
-if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
-    playback_path = os.path.abspath(sys.argv[1])
+try:
+    playback_path = sys.argv[1]
     open_mode = "Playback"
-else:
+except:
     open_mode = "Main Menu"
     folder_path = os.getcwd()
 playback_path = "Solar Fishing Lite.ahk"
@@ -2155,6 +2155,75 @@ class Playback(tk.Tk):
 
         except (TypeError, ValueError):
             return True
+
+    def _coerce_for_compare(self, value):
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return value
+        text = str(value).strip()
+        if text == "":
+            return ""
+        lowered = text.lower()
+        if lowered == "true":
+            return 1
+        if lowered == "false":
+            return 0
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            pass
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            pass
+        return str(value)
+
+    def _compare_if(self, left, right, operator):
+        """AHK-style IF comparison: numeric when both sides are numeric,
+        otherwise string (case-insensitive for = / != / ==)."""
+        left = self._coerce_for_compare(left)
+        right = self._coerce_for_compare(right)
+
+        # AHK: '=' and '==' are case-insensitive string equality in v1;
+        # '!=' is inequality. When both sides are numeric, compare numerically.
+        both_numeric = isinstance(left, (int, float)) and isinstance(right, (int, float))
+        if both_numeric:
+            if operator == "=":
+                return left == right
+            if operator == "==":
+                return left == right
+            if operator == "!=":
+                return left != right
+            if operator == ">":
+                return left > right
+            if operator == "<":
+                return left < right
+            if operator == ">=":
+                return left >= right
+            if operator == "<=":
+                return left <= right
+            raise ValueError(f"Unsupported operator: {operator}")
+
+        # String comparison. AHK v1 '=' / '==' are case-insensitive.
+        ls, rs = str(left), str(right)
+        if operator in ("=", "=="):
+            return ls.lower() == rs.lower()
+        if operator == "!=":
+            return ls.lower() != rs.lower()
+        # Relational on strings: lexicographic, case-insensitive.
+        ls, rs = ls.lower(), rs.lower()
+        if operator == ">":
+            return ls > rs
+        if operator == "<":
+            return ls < rs
+        if operator == ">=":
+            return ls >= rs
+        if operator == "<=":
+            return ls <= rs
+        raise ValueError(f"Unsupported operator: {operator}")
 
     def cmd_if(self, start_line, condition, script=None):
         # Initialize Defaults
