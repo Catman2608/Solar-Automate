@@ -1159,123 +1159,109 @@ class WindowSpy:
         self.window.grid_rowconfigure(0, weight=0)
         self.window.grid_rowconfigure(1, weight=1)
         self.window.grid_columnconfigure(0, weight=1)
-# AHK ToolTip - full-screen transparent click-through overlay
-class ToolTipOverlay:
-    def __init__(self, master):
-        self.master = master
+
+# Status Overlay
+class StatusOverlay:
+    """Encapsulates the text-based status overlay (v1 → v3 refactor)."""
+
+    def __init__(self, parent_app):
+        self.parent_app = parent_app
         self.window = None
-        self.labels = {}  # which (int) -> Label
+        self.labels = {}
 
-    def _ensure_window(self):
-        if self.window is not None:
+    def init_window(self):
+        """Create and initialize the overlay window."""
+        if self.window and self.window.winfo_exists():
             return
-        self.window = tk.Toplevel(self.master)
-        self.window.overrideredirect(True)
-        sw = self.master.winfo_screenwidth()
-        sh = self.master.winfo_screenheight()
-        self.window.geometry(f"{sw}x{sh}+0+0")
+
+        self.window = tk.Toplevel(self.parent_app)
+        self.window.title("Status Overlay")
+
+        # Position (Top-Left Like V1)
+        self.window.geometry(f"260x200+20+40")
+
+        # General settings for Windows and macOS compatibility
         self.window.attributes("-topmost", True)
-        # Transparent background color so only labels are visible
-        trans_color = "magenta"
-        self.window.configure(bg=trans_color)
-        try:
-            self.window.attributes("-transparentcolor", trans_color)
-        except Exception:
-            pass
-        # Click-through (Windows)
+        self.window.configure(bg="black")
+
+        # Disable Interaction On Windows (Same Intent As V1)
         if sys.platform == "win32":
-            self._set_click_through(True)
-        self.window.withdraw()
+            try:
+                self.window.attributes("-disabled", True)
+            except:
+                pass
 
-    def _set_click_through(self, enabled=True):
-        if sys.platform != "win32" or self.window is None:
-            return
-        try:
-            hwnd = self.window.winfo_id()
-            GWL_EXSTYLE = -20
-            WS_EX_LAYERED = 0x00080000
-            WS_EX_TRANSPARENT = 0x00000020
-            # Use Ptr versions for 64-bit safety
-            user32 = ctypes.windll.user32
-            user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-            user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
-            user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
-            user32.SetWindowLongPtrW.argtypes = [
-                wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t
-            ]
-            style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
-            if enabled:
-                new_style = style | WS_EX_LAYERED | WS_EX_TRANSPARENT
-            else:
-                new_style = style & ~WS_EX_TRANSPARENT
-            if new_style != style:
-                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style)
-                # Apply changes
-                SWP_NOMOVE = 0x0002
-                SWP_NOSIZE = 0x0001
-                SWP_NOZORDER = 0x0004
-                SWP_NOACTIVATE = 0x0010
-                SWP_FRAMECHANGED = 0x0020
-                user32.SetWindowPos(
-                    hwnd, 0, 0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
-                    SWP_NOACTIVATE | SWP_FRAMECHANGED
-                )
-        except Exception as exc:
-            print(f"ToolTip click-through setup failed: {exc}")
+        # Grid Config
+        self.window.grid_columnconfigure(0, weight=1)
 
-    def show(self, which, text, x, y):
-        self._ensure_window()
-        which = int(which) if which else 1
-        if which not in self.labels:
+        # Title
+        title = tk.Label(
+            self.window,
+            text="Status Overlay",
+            fg="#ca0000",
+            bg="black",
+            font=("Segoe UI", 12, "bold")
+        )
+        title.grid(row=0, column=0, pady=(8, 2), sticky="n")
+
+        # Create 7 Status Lines (Changed From 5 To 7)
+        for row in range(1, 8):
             lbl = tk.Label(
                 self.window,
-                text=text,
-                bg="yellow",
-                fg="black",
-                relief="solid",
-                borderwidth=1,
-                padx=4,
-                pady=2,
-                font=("Segoe UI", 9)
+                text="sample",
+                fg="white",
+                bg="black",
+                font=("Segoe UI", 10)
             )
-            self.labels[which] = lbl
-        else:
-            self.labels[which].config(text=text)
-        # Place relative to the full-screen window (origin at 0,0)
-        try:
-            px = int(x) if x is not None else 0
-            py = int(y) if y is not None else 0
-        except (TypeError, ValueError):
-            px, py = 0, 0
-        self.labels[which].place(x=px, y=py)
-        self.window.deiconify()
-        self.window.lift()
+            lbl.grid(row=row, column=0, sticky="n")
+            self.labels[row] = lbl
 
-    def hide(self, which=None):
-        if self.window is None:
-            return
-        if which is None:
-            # Hide all
-            for lbl in self.labels.values():
-                lbl.place_forget()
+    # Lifecycle
+    def show(self):
+        """Show the overlay."""
+        self.init_window()
+        if self.window and self.window.winfo_exists():
+            self.window.deiconify()
+            self.window.lift()
+
+    def hide(self):
+        """Hide the overlay."""
+        if self.window and self.window.winfo_exists():
             self.window.withdraw()
-        else:
-            which = int(which)
-            if which in self.labels:
-                self.labels[which].place_forget()
-            # Withdraw if nothing visible
-            if not any(lbl.winfo_ismapped() for lbl in self.labels.values()):
-                self.window.withdraw()
 
     def destroy(self):
-        if self.window is not None:
-            try:
-                self.window.destroy()
-            except Exception:
-                pass
-            self.window = None
-            self.labels.clear()
+        """Destroy overlay completely."""
+        if self.window and self.window.winfo_exists():
+            self.window.destroy()
+        self.window = None
+        self.labels.clear()
+
+    # Content Control
+
+    def set_line(self, text, row=1):
+        """Set text for a specific row (like ToolTip)."""
+        if not self.window or not self.window.winfo_exists():
+            return
+
+        lbl = self.labels.get(row)
+        if not lbl:
+            return
+
+        def _update():
+            lbl.config(text=text)
+
+        lbl.after(0, _update)
+
+    def clear(self):
+        """Clear all lines."""
+        if not self.window or not self.window.winfo_exists():
+            return
+
+        def _clear():
+            for lbl in self.labels.values():
+                lbl.config(text="")
+
+        self.window.after(0, _clear)
 
 # AHK playback
 class Playback(tk.Tk):
@@ -1346,8 +1332,8 @@ class Playback(tk.Tk):
         self.load_cache = {}
         self.save_cache = []
         self.cached_file = ""
-        # ToolTip overlay (full-screen transparent click-through)
-        self.tooltip_overlay = ToolTipOverlay(self)
+        self.status_overlay = StatusOverlay(self)
+        self.status_overlay.show()
         # 4. Hotkey & Listener Setup
         # Unified Hotkey Registry: Normalized_Key -> Label_Name (Str) Or Body Lines (List)
         # Presence in the dict means the hotkey is enabled. Hotkey, ..., off deletes the entry.
@@ -1554,16 +1540,31 @@ class Playback(tk.Tk):
                                 variable_value = self.handle_math(variable_value)
                         self.local_variables[variable_name] = variable_value
                 else:
-                    # Compound assignments require an existing variable.
-                    if variable_name not in self.local_variables:
-                        raise NameError( f"Variable '{variable_name}' is not defined")
-                    current_value = self.local_variables[variable_name]
-                    # Convert both operands to numbers.
-                    try:
-                        left = float(current_value)
-                        right = float(variable_value)
-                    except (TypeError, ValueError):
-                        raise TypeError( f"Cannot apply {operator} to " f"'{current_value}' and '{variable_value}'")
+                    # AHK v1: an unset variable is blank, and blank coerces to 0
+                    # in numeric context. So `x += blank` behaves like `x += 0`.
+                    # Do NOT raise here; just default missing / blank operands to 0.
+                    def _ahk_num(v):
+                        """Coerce an AHK operand to a number: blank/unset/non-numeric -> 0."""
+                        if v is None:
+                            return 0.0
+                        if isinstance(v, bool):
+                            return float(int(v))
+                        if isinstance(v, (int, float)):
+                            return float(v)
+                        s = str(v).strip()
+                        if s == "":
+                            return 0.0
+                        try:
+                            return float(s)
+                        except (TypeError, ValueError):
+                            # AHK v1 numeric conversion of a non-numeric string
+                            # yields 0, not an error.
+                            return 0.0
+
+                    current_value = self.local_variables.get(variable_name, "")
+                    left = _ahk_num(current_value)
+                    right = _ahk_num(variable_value)
+
                     if operator == '+=':
                         result = left + right
                     elif operator == '-=':
@@ -1572,18 +1573,39 @@ class Playback(tk.Tk):
                         result = left * right
                     elif operator == '/=':
                         if right == 0:
-                            raise ZeroDivisionError("Division by zero")
+                            # AHK v1: division by zero on integer division
+                            # raises an error in expression mode; keep the
+                            # original behavior so bad scripts still surface.
+                            raise ZeroDivisionError(
+                                f"Division by zero in {variable_name} /= {right}"
+                            )
 
                         result = left / right
                     else:
-                        raise RuntimeError( f"Unsupported assignment operator: {operator}")
-                    # Preserve integer results when both operands are integers.
-                    if (
+                        raise RuntimeError(
+                            f"Unsupported assignment operator: {operator}"
+                        )
+
+                    # Preserve integer results when both operands were integers
+                    # (or integer-looking strings). `+= 1` on an int stays int,
+                    # matching AHK v1's integer arithmetic.
+                    left_is_int = (
                         isinstance(current_value, int)
-                        or str(current_value).lstrip('-').isdigit()
-                    ) and str(variable_value).lstrip('-').isdigit():
-                        if result.is_integer():
-                            result = int(result)
+                        and not isinstance(current_value, bool)
+                    ) or (
+                        isinstance(current_value, str)
+                        and current_value.strip().lstrip("-").isdigit()
+                    )
+                    right_is_int = (
+                        isinstance(variable_value, int)
+                        and not isinstance(variable_value, bool)
+                    ) or (
+                        isinstance(variable_value, str)
+                        and variable_value.strip().lstrip("-").isdigit()
+                    )
+                    if left_is_int and right_is_int and result.is_integer():
+                        result = int(result)
+
                     self.local_variables[variable_name] = result
             # VariableName .= Value
             # AHK v1: same as Var := Var . Value (expression).
@@ -1647,6 +1669,12 @@ class Playback(tk.Tk):
                 skip_until = self.cmd_if(line_count, result, _script)
                 continue
 
+            if processed_line.startswith("filedelete"):
+                arguments = [p.strip() for p in current_line.split(",")]
+                variable = arguments[1]
+                if "%" in variable:
+                    variable = self.handle_variable(variable)
+                os.remove(variable)
             if processed_line.startswith("outputdebug"):
                 print(self.handle_variable(current_line.strip("OutputDebug, ")) if "%" in processed_line else current_line)
             if processed_line.startswith("pixelsearch"):
@@ -1654,7 +1682,12 @@ class Playback(tk.Tk):
             if processed_line.startswith("pixelgetcolor"):
                 self.cmd_pixelgetcolor(current_line)
             if processed_line.startswith("tooltip"):
-                self.cmd_tooltip(current_line)
+                # ToolTip, Current Task: Beginning Alignment, %ToolTipX%, %ToolTip6%, 6
+                arguments = [p.strip() for p in current_line.split(",")]
+                try:
+                    self.status_overlay.set_line(self.handle_variable(arguments[1]), row=int(arguments[4])-4)
+                except Exception as e:
+                    pass
             if processed_line.startswith("send"):
                 self._cmd_send(current_line)
             if processed_line.startswith("click"):
@@ -1852,6 +1885,35 @@ class Playback(tk.Tk):
                 if v and v != 0:
                     self.gui_controls[v] = label
                     self.gui_place_info[v] = {"x": place_x, "y": place_y}
+            # Gui, Add, Link
+            elif arguments[2] == "Link":
+                link = arguments[4].replace('<a href="', "")
+                link = link.replace("</a>", "")
+                url, text = link.split('">')
+                label = tk.Label(self.current_tab2, text=text, bg=self.gui_color, font=("Segoe UI", self.font_size, font_style), fg="#0093ff", cursor="hand2")
+                label.bind(
+                    "<Button-1>",
+                    lambda e, u=url: open_link(u)()
+                )
+                place_x = x - current_offset_x
+                place_y = y - current_offset_y
+                label.place(x=place_x, y=place_y)
+                if v and v != 0:
+                    self.gui_controls[v] = label
+                    self.gui_place_info[v] = {"x": place_x, "y": place_y}
+            # Gui, Add, Image
+            if any(word in arguments[2] for word in ("Image", "Picture")):
+                try:
+                    image_file = self.handle_concat(arguments[4]).strip("%").replace("\\", "/")
+                    photo_image = tk.PhotoImage(file=image_file)
+                    place_x = x - current_offset_x
+                    place_y = y - current_offset_y
+                    label.place(x=place_x, y=place_y)
+                    if v and v != 0:
+                        self.gui_controls[v] = label
+                        self.gui_place_info[v] = {"x": place_x, "y": place_y}
+                except tk.TclError:
+                    pass
             # Gui, Add, Edit
             if arguments[2] == "Edit":
                 entry_var = tk.StringVar(value="")
@@ -2382,6 +2444,10 @@ class Playback(tk.Tk):
                 self.local_variables["ErrorLevel"] = 1
                 return 0
 
+        def FileExist(file_name):
+            file_name = file_name.replace("\\", "/")
+            return os.path.exists(file_name)
+
         self.builtin_functions = {
             "A_TickCount": int(time.monotonic() * 1000),
             # Basic Functions
@@ -2391,7 +2457,7 @@ class Playback(tk.Tk):
             "SubStr": SubStr,
             "StrLen": StrLen,
             "Round": round,
-            "Abs": abs,
+            "Abs": lambda x: abs(self._to_number(x)),
             "Min": min,
             "Max": max,
             "Ceil": lambda x: math.ceil(float(x)),
@@ -2409,6 +2475,8 @@ class Playback(tk.Tk):
             "GetKeyState": GetKeyState,
             # DllCall
             "DllCall": DllCall,
+            # File Management
+            "FileExist": FileExist,
         }
     def find_labels(self, script=None):
         # Initialize Defaults
@@ -2764,6 +2832,25 @@ class Playback(tk.Tk):
             _script = self.script
         else:
             _script = script
+        # Single-statement if (no braces on the if line): body is the next statement.
+        # AHK: IfMsgBox, No\n    return   applies only to the following line.
+        if_line = _script[start_line] if 0 <= start_line < len(_script) else ""
+        if "{" not in if_line:
+            # Find the next non-blank, non-comment line as the body.
+            body_line = None
+            for scan in range(start_line + 1, len(_script)):
+                stripped = _script[scan].strip()
+                if stripped and not stripped.startswith(";"):
+                    body_line = scan
+                    break
+            if body_line is None:
+                return start_line
+            if condition:
+                # Execute just the body line.
+                self.execute_script(body_line - 1, body_line + 1, _script)
+            # Skip past the body whether we executed it or not.
+            return body_line
+
         # Find the end of the IF block.
         braces = 0
         if_end = start_line
@@ -3104,9 +3191,15 @@ class Playback(tk.Tk):
 
         return self._eval_math_expr(raw)
 
+    def _to_number(self, token, as_int=False, _depth=0):
+        """Coerce one operand to float/int. Unset/blank/non-numeric -> 0.
 
-    def _to_number(self, token, as_int=False):
-        """Coerce one operand to float/int. Unset/blank/non-numeric -> 0."""
+        _depth bounds recursive variable/expression expansion so a variable whose
+        value refers to itself (directly or indirectly) cannot recurse forever.
+        """
+        if _depth > 20:
+            return 0 if as_int else 0.0
+
         raw = "" if token is None else str(token).strip()
         if raw == "":
             return 0 if as_int else 0.0
@@ -3129,33 +3222,40 @@ class Playback(tk.Tk):
             pass
 
         # Last resort: expression eval.
-        result = self._eval_math_expr(str(resolved))
+        result = self._eval_math_expr(str(resolved), _depth=_depth + 1)
         try:
             n = float(result)
             return int(n) if as_int else n
         except (TypeError, ValueError):
             return 0 if as_int else 0.0
 
-
-    def _eval_math_expr(self, expr):
+    def _eval_math_expr(self, expr, _depth=0):
         """
         Evaluate a math expression after substituting known variables.
         Unset identifiers become 0 (AHK v1 expression semantics).
-        Returns the original expression unchanged if it is not safely evaluable.
+        Returns the original expression unchanged if it is not safely evaluable,
+        or if it contains no math operators (so plain strings / bare names stay strings).
         """
         original = "" if expr is None else str(expr)
+        if _depth > 20:
+            return original
         expr = original
+
+        # Plain strings or bare identifiers (no operators / parens) must not be
+        # coerced to 0. Only real expressions are evaluated.
+        if not self._has_unquoted_math_operator(expr) and "(" not in expr and ")" not in expr:
+            return original
 
         # Expand %Var% to numeric values.
         expr = _VAR_RE.sub(
-            lambda m: str(self._to_number(m.group(1))), expr
+            lambda m: str(self._to_number(m.group(1), _depth=_depth + 1)), expr
         )
         # Replace bare identifiers: known var -> its numeric value, else 0.
         def repl_ident(m):
             found = self.local_variables.get(
                 m.group(0), self.builtin_variables.get(m.group(0))
             )
-            return str(self._to_number(found)) if found is not None else "0"
+            return str(self._to_number(found, _depth=_depth + 1)) if found is not None else "0"
         expr = _IDENT_RE.sub(repl_ident, expr)
         expr = expr.replace(" ", "")
 
@@ -3639,6 +3739,8 @@ class Playback(tk.Tk):
             value = self.handle_variable(value)
         subcommand = subcommand.lower()
         if subcommand == "":
+            if value == "":
+                return
             # Set Text/Value (Or Image File For Picture/Image Controls)
             if isinstance(widget, tk.Entry):
                 widget.delete(0, tk.END)
@@ -4231,11 +4333,8 @@ class Playback(tk.Tk):
             return
 
         combo = self.find_hotkey_combo(self._active_hotkey_modifiers, normalized)
-        try:
-            target = self.hotkeys[combo]
-        except KeyError:
-            return
-
+        # A key press without a registered hotkey is normal; avoid KeyError.
+        target = self.hotkeys.get(combo, None)
         if target is None:
             return
 
@@ -4508,50 +4607,6 @@ class Playback(tk.Tk):
         except Exception:
             print(traceback.format_exc())
             self.local_variables["ErrorLevel"] = 1
-
-    def cmd_tooltip(self, line):
-        """AHK ToolTip [, Text, X, Y, WhichToolTip]
-        Implemented as a full-screen transparent, click-through overlay.
-        """
-        try:
-            # Strip command name
-            parts = [p.strip() for p in line.split(",")]
-            text = ""
-            x = None
-            y = None
-            which = 1
-            if len(parts) > 1:
-                text = parts[1]
-            if len(parts) > 2 and parts[2]:
-                x = self._to_number(self.handle_variable(parts[2]), as_int=True)
-            if len(parts) > 3 and parts[3]:
-                y = self._to_number(self.handle_variable(parts[3]), as_int=True)
-            if len(parts) > 4 and parts[4]:
-                try:
-                    which = int(self._to_number(self.handle_variable(parts[4]), as_int=True))
-                except (TypeError, ValueError):
-                    which = 1
-            # Resolve variables / expressions in text
-            text = str(self.handle_variable(text))
-            text = text.replace("`n", "\n")
-            if not text:
-                # Empty text hides the specified (or default) tooltip
-                self.tooltip_overlay.hide(which)
-                return
-            # Default position near mouse if X/Y omitted
-            if x is None or y is None:
-                try:
-                    mx, my = mouse_controller.position
-                    if x is None:
-                        x = int(mx) + 10
-                    if y is None:
-                        y = int(my) + 10
-                except Exception:
-                    x = x or 100
-                    y = y or 100
-            self.tooltip_overlay.show(which, text, x, y)
-        except Exception:
-            print(traceback.format_exc())
 
     def _send_key(self, key2, backend2, delay2=0.05, click_type=0):
         """
